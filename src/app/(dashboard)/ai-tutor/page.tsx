@@ -62,6 +62,7 @@ export default function AITutorPage() {
   const [showCourseFilter, setShowCourseFilter] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const recognitionRef = useRef<any>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const supabase = createClient();
 
@@ -180,6 +181,7 @@ export default function AITutorPage() {
         course_id: selectedCourse || undefined,
         user_id: (await supabase.auth.getUser()).data.user?.id || "",
         language,
+        conversation_history: messages.slice(-10).map(message => ({ role: message.role, content: message.content })),
       });
 
       if (response && (response as any).success) {
@@ -241,7 +243,53 @@ export default function AITutorPage() {
     }
   };
 
-  const LANG_TO_BCP47: Record<string,string> = { en:"en-US", hi:"hi-IN", bn:"bn-IN", ta:"ta-IN", te:"te-IN", mr:"mr-IN", gu:"gu-IN", kn:"kn-IN", ml:"ml-IN", or:"or-IN" };
+  const LANG_TO_BCP47: Record<string,string> = { en:"en-IN", hi:"hi-IN", bn:"bn-IN", ta:"ta-IN", te:"te-IN", mr:"mr-IN", gu:"gu-IN", kn:"kn-IN", ml:"ml-IN", or:"od-IN" };
+
+  const toggleSarvamSTT = () => {
+    if (isRecording) { recognitionRef.current?.stop(); return; }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") { alert("Audio recording is not supported. Please type your question."); return; }
+    (async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const mimeType = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4";
+        const recorder = new MediaRecorder(stream, { mimeType });
+        audioChunksRef.current = [];
+        recorder.ondataavailable = (event) => { if (event.data.size) audioChunksRef.current.push(event.data); };
+        recorder.onstop = async () => {
+          stream.getTracks().forEach(track => track.stop());
+          setIsRecording(false);
+          const blob = new Blob(audioChunksRef.current, { type: mimeType });
+          if (blob.size < 1500) { alert("Recording too short — hold mic 1-2s and speak clearly"); return; }
+          const session = (await supabase.auth.getSession()).data.session;
+          const form = new FormData();
+          const ext = mimeType.includes("mp4") ? "mp4" : "webm";
+          form.append("file", blob, `tutor-${Date.now()}.${ext}`);
+          form.append("language_code", LANG_TO_BCP47[language] || "unknown");
+          try {
+            const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/ai/speech-to-text`, { method: "POST", headers: { Authorization: `Bearer ${session?.access_token || ""}` }, body: form });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+              if (response.status === 422) { alert(data.error || "No speech detected — speak louder, closer to mic, 1-2s"); return; }
+              throw new Error(data.error || "Sarvam transcription failed");
+            }
+            const transcript = data.data?.transcript || "";
+            const detected = data.data?.language_code || "";
+            // Auto-switch UI language to detected (hi-IN→hi) so answer comes in same language you spoke
+            if (detected) {
+              const backMap: Record<string,string> = {"en-IN":"en","hi-IN":"hi","bn-IN":"bn","ta-IN":"ta","te-IN":"te","mr-IN":"mr","gu-IN":"gu","kn-IN":"kn","ml-IN":"ml","od-IN":"or","pa-IN":"pa"};
+              const autoLang = backMap[detected] || detected.slice(0,2);
+              if (autoLang && LANGUAGES.some(l=>l.code===autoLang) && autoLang !== language) setLanguage(autoLang);
+            }
+            if (transcript) setInput(prev => `${prev}${prev ? " " : ""}${transcript}`.trim());
+            else alert("No speech detected — try again, speak for at least 1 second");
+          } catch (error: any) { if (!String(error.message).includes("No speech")) alert(error.message || "Could not transcribe audio"); }
+        };
+        recognitionRef.current = recorder;
+        recorder.start();
+        setIsRecording(true);
+      } catch (error: any) { alert(error.message || "Microphone permission is required"); }
+    })();
+  };
 
   const toggleSTT = () => {
     if (isRecording) {
@@ -456,7 +504,7 @@ export default function AITutorPage() {
           />
           <button
             type="button"
-            onClick={toggleSTT}
+            onClick={toggleSarvamSTT}
             title={isRecording ? "Stop listening" : `Speak in ${LANGUAGES.find(l=>l.code===language)?.native || language}`}
             className={`p-3 h-10 flex-shrink-0 rounded-lg border flex items-center justify-center ${isRecording ? "bg-red-600 text-white border-red-600 animate-pulse" : "bg-white border-surface-200 hover:bg-surface-50 text-surface-700"}`}
           >

@@ -198,6 +198,9 @@ export default function LiveTutorPage() {
             if (msg.type === "interrupt_acknowledged") {
               queueRef.current = []; playingRef.current = false;
             }
+            if (msg.type === "language_detected" && msg.language) {
+              setLanguage(msg.language);
+            }
             if (msg.type === "error") {
               setError(msg.message);
               console.error("WS error:", msg.message);
@@ -296,8 +299,8 @@ export default function LiveTutorPage() {
         }
       };
 
-      // 250ms chunks: balance between latency and request rate
-      recorder.start(250);
+      // 1000ms chunks: Sarvam saaras:v3 needs ~0.8-1.5s for accurate transcription; buffered on backend
+      recorder.start(1000);
       setMicEnabled(true);
     } catch (e: any) {
       setError(`Microphone access denied: ${e.message || e}`);
@@ -321,6 +324,10 @@ export default function LiveTutorPage() {
     analyserRef.current = null;
     setMicEnabled(false);
     setAudioLevel(0);
+    // Tell backend to flush any buffered audio (Sarvam needs complete utterance)
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "utterance_end" }));
+    }
   };
 
   const toggleMic = () => {

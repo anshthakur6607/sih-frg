@@ -100,6 +100,13 @@ export default function EnhancedQuizGenerator() {
   const [selectedCourseId, setSelectedCourseId] = useState<string>("");
   const [courseMaterials, setCourseMaterials] = useState<Array<{ title: string; url: string; type: string }>>([]);
   const [materialsLoading, setMaterialsLoading] = useState(false);
+  const [adaptiveAnswer, setAdaptiveAnswer] = useState<number | null>(null);
+  const [adaptiveAnswers, setAdaptiveAnswers] = useState<Array<{ question_id: string; selected_option: number }>>([]);
+  const [adaptiveSubmitted, setAdaptiveSubmitted] = useState(false);
+  const [selectedOptions, setSelectedOptions] = useState<Record<string, number>>({});
+  const [quizSubmitted, setQuizSubmitted] = useState(false);
+  const [bankQuestions, setBankQuestions] = useState<QuizQuestion[]>([]);
+  const [bankLoading, setBankLoading] = useState(false);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const supabase = createClient();
@@ -129,6 +136,21 @@ export default function EnhancedQuizGenerator() {
     });
   }, [selectedCourseId]);
 
+  useEffect(() => {
+    if (mode !== "bank") return;
+    (async () => {
+      setBankLoading(true);
+      try {
+        const token = (await supabase.auth.getSession()).data.session?.access_token;
+        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/ai/questions`, { headers: { Authorization: `Bearer ${token}` } });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || "Could not load question bank");
+        setBankQuestions(data.data || []);
+      } catch (err: any) { setError(err.message || "Could not load question bank"); }
+      finally { setBankLoading(false); }
+    })();
+  }, [mode, supabase]);
+
   const toggleBloomLevel = (id: string) => {
     setSelectedBloomLevels(prev =>
       prev.includes(id) ? prev.filter(l => l !== id) : [...prev, id]
@@ -152,15 +174,98 @@ export default function EnhancedQuizGenerator() {
     }
   };
 
+  const isAdaptive = difficulty === -999;
+
+  const generateAdaptiveQuestion = async (history: Array<{ question_id: string; selected_option: number }>) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("Please sign in before generating a quiz");
+    const token = (await supabase.auth.getSession()).data.session?.access_token;
+    const requestBody = {
+      course_id: selectedCourseId || undefined,
+      question_count: 1,
+      bloom_levels: selectedBloomLevels,
+      difficulty: 0,
+      language: selectedLanguage,
+      adaptive: true,
+      previous_answers: history,
+      document_text: file && !fileText.trim() ? undefined : fileText,
+    };
+    let response: Response;
+    if (file && (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf") || file.name.toLowerCase().endsWith(".docx"))) {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("config", JSON.stringify({ ...requestBody, document_text: undefined }));
+      response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/ai/quiz/generate-from-file`, {
+        method: "POST", headers: { Authorization: `Bearer ${token}` }, body: formData,
+      });
+    } else {
+      response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/ai/quiz/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(requestBody),
+      });
+    }
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.success || !data.data?.questions?.[0]) {
+      throw new Error(data.error || data.detail || "Could not generate the next adaptive question");
+    }
+    return data.data.questions[0] as QuizQuestion;
+  };
+
+  const handleAdaptiveNext = async () => {
+    const current = quiz[quiz.length - 1];
+    if (!current || adaptiveAnswer === null) {
+      setError("Select an answer before continuing");
+      return;
+    }
+    const history = [...adaptiveAnswers, { question_id: current.id, selected_option: adaptiveAnswer }];
+    setGenerating(true);
+    setError(null);
+    try {
+      setAdaptiveAnswers(history);
+      if (history.length >= questionCount) {
+        const token = (await supabase.auth.getSession()).data.session?.access_token;
+        const submit = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/ai/quiz/submit`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            course_id: selectedCourseId || undefined,
+            answers: history.map(answer => ({
+              question_id: answer.question_id,
+              selected_option: answer.selected_option,
+              correct_answer: quiz.find(question => question.id === answer.question_id)?.correct_answer,
+            })),
+          }),
+        });
+        const submitData = await submit.json().catch(() => ({}));
+        if (!submit.ok) throw new Error(submitData.error || "Could not submit quiz");
+        setAdaptiveSubmitted(true);
+        return;
+      }
+      const next = await generateAdaptiveQuestion(history);
+      setQuiz(prev => [...prev, next]);
+      setAdaptiveAnswer(null);
+    } catch (err: any) {
+      setError(err.message || "Failed to generate the next question");
+    } finally {
+      setGenerating(false);
+    }
+  };
+
   const handleGenerate = async () => {
-    if (!file && !fileText.trim()) {
-      setError("Please upload a file or enter text content");
+    if (!file && !fileText.trim() && !selectedCourseId) {
+      setError("Select a course with study material, upload a PDF/DOCX/TXT, or paste text");
       return;
     }
 
     setGenerating(true);
     setError(null);
     setDuplicateWarnings({});
+    setAdaptiveAnswers([]);
+    setAdaptiveAnswer(null);
+    setAdaptiveSubmitted(false);
+    setSelectedOptions({});
+    setQuizSubmitted(false);
 
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -172,13 +277,17 @@ export default function EnhancedQuizGenerator() {
       // Clamp difficulty to backend-allowed range [-3, 3]; -999 sentinel means "auto-calibrate via IRT"
       const safeDifficulty = irtCalibration ? 0 : Math.max(-3, Math.min(3, difficulty));
       const requestBody: any = {
+        course_id: selectedCourseId || undefined,
         question_count: questionCount,
         bloom_levels: selectedBloomLevels,
         difficulty: safeDifficulty,
         language: selectedLanguage,
         check_duplicates: duplicateCheck,
         irt_calibration: irtCalibration,
+        adaptive: isAdaptive,
+        previous_answers: [],
       };
+      if (isAdaptive) requestBody.question_count = 1;
 
       let response: any;
 
@@ -210,7 +319,12 @@ export default function EnhancedQuizGenerator() {
       const data = await response.json();
 
       if (data.success && data.data?.questions) {
-        let questions: QuizQuestion[] = data.data.questions;
+        let questions: QuizQuestion[] = data.data.questions.filter((q: QuizQuestion) =>
+          q.text?.trim() && Array.isArray(q.options) && q.options.length === 4 &&
+          new Set(q.options.map(option => option.trim().toLowerCase())).size === 4 &&
+          Number.isInteger(q.correct_answer) && q.correct_answer >= 0 && q.correct_answer < 4
+        );
+        if (questions.length === 0) throw new Error("The AI returned no valid multiple-choice questions. Please retry.");
         
         // Process duplicate warnings
         if (duplicateCheck) {
@@ -251,31 +365,54 @@ export default function EnhancedQuizGenerator() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      // Save each question with IRT params
+      const token = (await supabase.auth.getSession()).data.session?.access_token;
+      // Save each question through the authenticated backend question-bank API.
       for (const q of quiz) {
-        await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/api/questions`, {
+        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/api/ai/questions`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
           body: JSON.stringify({
-            question_text: q.text,
+            text: q.text,
             options: q.options,
             correct_answer: q.correct_answer,
             bloom_level: q.bloom_level,
-            difficulty: q.difficulty,
+            difficulty_beta: q.difficulty,
             explanation: q.explanation,
             language: q.language || selectedLanguage,
-            irt_a: 1.2,
-            irt_b: q.irt_difficulty || 0,
-            irt_c: 0.2,
             content_hash: simpleHash(q.text),
           }),
         });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || "Could not save a question");
       }
 
+      setBankQuestions(prev => [...quiz, ...prev]);
       alert(`Saved ${quiz.length} questions to question bank!`);
     } catch (err) {
       console.error("Save failed:", err);
     }
+  };
+
+  const handleSubmitGeneratedQuiz = async () => {
+    if (!quiz.length || quiz.some(q => selectedOptions[q.id] === undefined)) {
+      setError("Select an option for every question before submitting");
+      return;
+    }
+    try {
+      const token = (await supabase.auth.getSession()).data.session?.access_token;
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/ai/quiz/submit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          course_id: selectedCourseId || undefined,
+          answers: quiz.map(q => ({ question_id: q.id, selected_option: selectedOptions[q.id], correct_answer: q.correct_answer })),
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not submit quiz");
+      setQuizSubmitted(true);
+      alert(`Quiz checked: ${data.data.correct}/${data.data.total} correct (${data.data.score}%). Progress updated.`);
+    } catch (err: any) { setError(err.message || "Could not submit quiz"); }
   };
 
   const handleExport = (format: "json" | "csv") => {
@@ -546,7 +683,7 @@ export default function EnhancedQuizGenerator() {
             {/* Generate Button */}
             <button
               onClick={handleGenerate}
-              disabled={generating || (!file && !fileText.trim())}
+              disabled={generating || (!file && !fileText.trim() && !selectedCourseId)}
               className="btn btn-primary w-full py-3 text-lg flex items-center justify-center gap-2"
             >
               {generating ? (
@@ -611,7 +748,7 @@ export default function EnhancedQuizGenerator() {
 
                 {/* Questions List */}
                 <div className="space-y-4">
-                  {quiz.map((q, idx) => (
+                  {quiz.slice(isAdaptive ? -1 : undefined).map((q, idx) => (
                     <div key={q.id} className="bg-white rounded-lg shadow-md border overflow-hidden">
                       {/* Question Header */}
                       <div className="p-4">
@@ -630,19 +767,14 @@ export default function EnhancedQuizGenerator() {
                             </span>
                           </div>
                           <div className="flex gap-1">
-                            <button
-                              onClick={() => copyQuestion(q)}
-                              className="p-1.5 hover:bg-surface-100 rounded"
-                              title="Copy"
-                            >
-                              <Copy className="w-4 h-4 text-surface-400" />
-                            </button>
-                            <button
-                              onClick={() => setSelectedQuestion(selectedQuestion?.id === q.id ? null : q)}
-                              className="p-1.5 hover:bg-surface-100 rounded"
-                            >
-                              <Eye className="w-4 h-4 text-surface-400" />
-                            </button>
+                            {!isAdaptive && <>
+                              <button onClick={() => copyQuestion(q)} className="p-1.5 hover:bg-surface-100 rounded" title="Copy">
+                                <Copy className="w-4 h-4 text-surface-400" />
+                              </button>
+                              <button onClick={() => setSelectedQuestion(selectedQuestion?.id === q.id ? null : q)} className="p-1.5 hover:bg-surface-100 rounded">
+                                <Eye className="w-4 h-4 text-surface-400" />
+                              </button>
+                            </>}
                           </div>
                         </div>
 
@@ -652,26 +784,18 @@ export default function EnhancedQuizGenerator() {
                         {/* Options */}
                         <div className="space-y-1.5">
                           {q.options.map((opt, i) => (
-                            <div
+                            <label
                               key={i}
-                              className={`flex items-center gap-2 p-2 rounded ${
-                                i === q.correct_answer
-                                  ? "bg-green-50 border border-green-200"
-                                  : "bg-surface-50"
-                              }`}
+                              className={`flex items-center gap-2 p-2 rounded border cursor-pointer ${((isAdaptive && adaptiveAnswer === i) || (!isAdaptive && selectedOptions[q.id] === i)) ? "bg-primary-50 border-primary-300" : "bg-surface-50 border-transparent"}`}
                             >
+                              <input type="radio" name={`quiz-${q.id}`} checked={isAdaptive ? adaptiveAnswer === i : selectedOptions[q.id] === i} onChange={() => isAdaptive ? setAdaptiveAnswer(i) : setSelectedOptions(prev => ({ ...prev, [q.id]: i }))} />
                               <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium ${
-                                i === q.correct_answer
-                                  ? "bg-green-500 text-white"
-                                  : "bg-surface-200 text-surface-600"
+                                isAdaptive && adaptiveAnswer === i ? "bg-primary-500 text-white" : "bg-surface-200 text-surface-600"
                               }`}>
                                 {String.fromCharCode(65 + i)}
                               </span>
                               <span className="text-sm text-surface-900">{opt}</span>
-                              {i === q.correct_answer && (
-                                <CheckCircle className="w-4 h-4 text-green-500 ml-auto" />
-                              )}
-                            </div>
+                            </label>
                           ))}
                         </div>
 
@@ -684,7 +808,7 @@ export default function EnhancedQuizGenerator() {
                         )}
 
                         {/* Expanded View */}
-                        {selectedQuestion?.id === q.id && (
+                        {!isAdaptive && selectedQuestion?.id === q.id && (
                           <div className="mt-3 pt-3 border-t border-surface-100">
                             <p className="text-xs font-medium text-surface-700 mb-1">Explanation:</p>
                             <p className="text-sm text-surface-600">{q.explanation}</p>
@@ -702,6 +826,27 @@ export default function EnhancedQuizGenerator() {
                     </div>
                   ))}
                 </div>
+                {!isAdaptive && quiz.length > 0 && (
+                  <div className="mt-5 flex items-center gap-3">
+                    <button onClick={handleSubmitGeneratedQuiz} disabled={quizSubmitted || Object.keys(selectedOptions).length !== quiz.length} className="btn btn-primary flex-1">
+                      {quizSubmitted ? "Quiz Submitted & Checked" : "Submit Answers & Update Progress"}
+                    </button>
+                    <span className="text-xs text-surface-500">{Object.keys(selectedOptions).length}/{quiz.length} answered</span>
+                  </div>
+                )}
+                {isAdaptive && quiz.length > 0 && !adaptiveSubmitted && (
+                  <div className="mt-5 rounded-lg border border-primary-200 bg-primary-50 p-4">
+                    <p className="text-sm text-primary-800 mb-3">Question {quiz.length} of {questionCount}. Your answer is hidden until you submit the quiz.</p>
+                    <button onClick={handleAdaptiveNext} disabled={generating || adaptiveAnswer === null} className="btn btn-primary w-full">
+                      {generating ? "Generating next question..." : quiz.length >= questionCount ? "Submit Quiz" : "Submit answer & generate next"}
+                    </button>
+                  </div>
+                )}
+                {isAdaptive && adaptiveSubmitted && (
+                  <div className="mt-5 rounded-lg border border-green-200 bg-green-50 p-4 text-center text-green-800">
+                    Quiz submitted successfully. Your responses have been recorded.
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -709,10 +854,18 @@ export default function EnhancedQuizGenerator() {
       )}
 
       {mode === "bank" && (
-        <div className="bg-white rounded-lg shadow p-12 text-center">
-          <BookOpen className="w-16 h-16 mx-auto text-surface-200 mb-4" />
-          <h3 className="text-lg font-medium text-surface-900 mb-2">Question Bank</h3>
-          <p className="text-surface-600">Browse and manage your saved questions</p>
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div><h3 className="text-lg font-medium text-surface-900">Question Bank</h3><p className="text-sm text-surface-600">Your saved AI questions</p></div>
+            <span className="text-sm text-surface-500">{bankQuestions.length} questions</span>
+          </div>
+          {bankLoading ? <div className="py-10 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto" /></div> : bankQuestions.length === 0 ? (
+            <div className="py-10 text-center text-surface-500"><BookOpen className="w-12 h-12 mx-auto text-surface-200 mb-3" />No saved questions yet. Generate a quiz and click Save to Bank.</div>
+          ) : <div className="space-y-3">{bankQuestions.map((q, index) => <div key={q.id || index} className="border rounded-lg p-4">
+            <p className="font-medium text-surface-900">{index + 1}. {q.text}</p>
+            <div className="grid md:grid-cols-2 gap-2 mt-3">{q.options.map((option, i) => <div key={i} className={`text-sm p-2 rounded ${i === q.correct_answer ? "bg-green-50 text-green-800 border border-green-200" : "bg-surface-50"}`}>{String.fromCharCode(65 + i)}. {option}</div>)}</div>
+            {q.explanation && <p className="text-xs text-surface-500 mt-3">{q.explanation}</p>}
+          </div>)}</div>}
         </div>
       )}
     </div>

@@ -154,7 +154,8 @@ async function apiRequest<T>(
       setBackendOffline(true);
     }
 
-    throw new Error(error.error || `API error: ${statusCode}`);
+    const message = error.error || error.detail || error.message || `API error: ${statusCode}`;
+    throw new ApiError(message, statusCode, error.code || 'API_ERROR');
   }
 
   return response.json();
@@ -532,6 +533,7 @@ export const aiApi = {
     course_id?: string;
     user_id: string;
     language?: string;
+    conversation_history?: Array<{ role: string; content: string }>;
   }) =>
     apiRequest<{ 
       success: boolean; 

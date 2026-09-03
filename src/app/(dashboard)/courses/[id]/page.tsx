@@ -32,6 +32,9 @@ export default function CoursePlayerPage() {
     supabase.from("course_materials").select("id, title, type, url, storage_path, content_text").eq("course_id", courseId).then(({ data }) => {
       if (data) setMaterials(data as any);
     });
+    supabase.from("course_enrollments").select("status, progress_percentage").eq("course_id", courseId).maybeSingle().then(({ data }) => {
+      if (data?.status === "completed" || data?.progress_percentage >= 100) setCompleted(true);
+    });
   }, [courseId, supabase]);
 
   // --- Course AI helper (scoped to this course) ---
@@ -45,17 +48,47 @@ export default function CoursePlayerPage() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   useEffect(()=>{ setAiLang(siteLang); },[siteLang]);
   useEffect(()=>{ chatEndRef.current?.scrollIntoView({ behavior:"smooth" }); },[aiMessages]);
-  const LANG_BCP: Record<string,string> = { en:"en-US", hi:"hi-IN", bn:"bn-IN", ta:"ta-IN", te:"te-IN", mr:"mr-IN", gu:"gu-IN", kn:"kn-IN", ml:"ml-IN", or:"or-IN" };
+  const LANG_BCP: Record<string,string> = { en:"en-IN", hi:"hi-IN", bn:"bn-IN", ta:"ta-IN", te:"te-IN", mr:"mr-IN", gu:"gu-IN", kn:"kn-IN", ml:"ml-IN", or:"od-IN" };
+  const LANG_TO_SARVAM_BCP: Record<string,string> = { en:"en-IN", hi:"hi-IN", bn:"bn-IN", ta:"ta-IN", te:"te-IN", mr:"mr-IN", gu:"gu-IN", kn:"kn-IN", ml:"ml-IN", or:"od-IN" };
+  // Sarvam STT for course AI — replaces browser SpeechRecognition (Hindi often wrong/empty with Web Speech API)
+  const audioChunksRef = useRef<Blob[]>([]);
+  const mediaRecorderRef = useRef<MediaRecorder|null>(null);
   const toggleCourseSTT = () => {
-    if (isSTT) { sttRef.current?.stop(); setIsSTT(false); return; }
-    const SR:any = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if(!SR){ alert("Use Chrome for voice input"); return; }
-    const rec = new SR(); sttRef.current=rec; rec.lang=LANG_BCP[aiLang]||"en-US"; rec.interimResults=true; rec.continuous=false;
-    let finalTxt=""; rec.onstart=()=>setIsSTT(true);
-    rec.onresult=(e:any)=>{ let interim=""; for(let i=e.resultIndex;i<e.results.length;i++){ const t=e.results[i][0].transcript; if(e.results[i].isFinal) finalTxt+=t+" "; else interim+=t; } setAiInput((finalTxt+interim).trimStart()); };
-    rec.onend=()=>{ setIsSTT(false); if(finalTxt.trim()) setAiInput(finalTxt.trim()); };
-    rec.onerror=()=>setIsSTT(false);
-    try{ rec.start(); }catch{}
+    if (isSTT) { mediaRecorderRef.current?.stop(); return; }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") { alert("Audio recording not supported — type your question."); return; }
+    (async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const mimeType = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4";
+        const rec = new MediaRecorder(stream, { mimeType });
+        mediaRecorderRef.current = rec; sttRef.current = rec as any; audioChunksRef.current = [];
+        rec.ondataavailable = (e:any)=>{ if(e.data?.size) audioChunksRef.current.push(e.data); };
+        rec.onstop = async () => {
+          stream.getTracks().forEach(t=>t.stop()); setIsSTT(false);
+          const blob = new Blob(audioChunksRef.current, { type: mimeType });
+          if (blob.size < 1200) return;
+          try {
+            const { data:{ session} } = await supabase.auth.getSession();
+            const form = new FormData();
+            const ext = mimeType.includes("mp4") ? "mp4" : "webm";
+            form.append("file", blob, `course-${Date.now()}.${ext}`);
+            form.append("language_code", LANG_TO_SARVAM_BCP[aiLang] || "unknown");
+            const r = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/ai/speech-to-text`, { method:"POST", headers:{ Authorization:`Bearer ${session?.access_token||""}` }, body: form });
+            const j = await r.json().catch(()=>({}));
+            if (!r.ok) {
+              if (r.status===422) { /* silence */ return; }
+              throw new Error(j.error||`STT ${r.status}`);
+            }
+            const tr = j.data?.transcript || "";
+            const det = j.data?.language_code || "";
+            const rev: Record<string,string>={"en-IN":"en","hi-IN":"hi","bn-IN":"bn","ta-IN":"ta","te-IN":"te","mr-IN":"mr","gu-IN":"gu","kn-IN":"kn","ml-IN":"ml","od-IN":"or","pa-IN":"pa"};
+            if(det && rev[det] && rev[det]!==aiLang) setAiLang(rev[det]);
+            if(tr) setAiInput(prev=> (prev?prev+" ":"")+tr);
+          } catch(e:any){ console.warn("Sarvam STT failed", e.message); }
+        };
+        rec.start(); setIsSTT(true);
+      } catch(e:any){ alert(e.message||"Microphone permission required"); setIsSTT(false); }
+    })();
   };
   const sendCourseAI = async (preset?: string) => {
     const msg = (preset || aiInput).trim(); if(!msg || aiLoading || !course) return;
@@ -94,6 +127,24 @@ export default function CoursePlayerPage() {
     } catch(e:any){ alert(e.message); } finally { setGenMatLoading(false); }
   };
 
+  const handleMarkComplete = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const { error } = await supabase.from("course_enrollments").upsert({
+      user_id: user.id,
+      course_id: courseId,
+      status: "completed",
+      progress_percentage: 100,
+      completed_at: new Date().toISOString(),
+      started_at: new Date().toISOString(),
+    }, { onConflict: "user_id,course_id" });
+    if (error) {
+      alert(`Could not mark course complete: ${error.message}`);
+      return;
+    }
+    setCompleted(true);
+  };
+
   if (notFound) return (
     <div className="p-8 text-center">
       <h2 className="text-xl font-semibold">Course not found</h2>
@@ -126,7 +177,10 @@ export default function CoursePlayerPage() {
       </div>
       <div className="bg-white rounded-lg p-4 border flex items-center justify-between">
         <div className="flex items-center gap-2"><Clock className="w-4 h-4" /> Duration: {course.duration_hours} hours</div>
-        <button onClick={()=>setCompleted(!completed)} className={`px-4 py-2 rounded font-medium ${completed ? "bg-green-600 text-white" : "bg-[#1e40af] text-white"}`}>{completed ? <><CheckCircle className="w-4 h-4 inline mr-1" /> Completed</> : "Mark Complete"}</button>
+        <div className="flex items-center gap-2">
+          <button onClick={handleMarkComplete} disabled={completed} className={`px-4 py-2 rounded font-medium ${completed ? "bg-green-600 text-white" : "bg-[#1e40af] text-white"}`}>{completed ? <><CheckCircle className="w-4 h-4 inline mr-1" /> Completed</> : "Mark Complete"}</button>
+          {completed && <Link href={`/quiz/${courseId}`} className="px-4 py-2 rounded font-medium bg-amber-500 text-white hover:bg-amber-600">Take Course Exam</Link>}
+        </div>
       </div>
       <div className="bg-white rounded-lg p-4 border">
         <h3 className="font-semibold mb-2">About this course</h3>

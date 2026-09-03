@@ -16,15 +16,44 @@ export default function QuizPage() {
   const supabase = createClient();
   const { tabSwitches, fullscreenExits, isFullscreen, requestFullscreen } = useAntiCheat(assessmentId, true);
   const [questions, setQuestions] = useState<any[]>([]);
+  const [attemptId, setAttemptId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [answers, setAnswers] = useState<Record<string, number>>({});
   const [submitting, setSubmitting] = useState(false);
   const [timeLeft, setTimeLeft] = useState(1800); // 30 min
 
   useEffect(() => {
-    supabase.from("questions").select("*").limit(10).then(({ data }) => {
-      if (data && data.length) setQuestions(data);
-      else setQuestions(Array.from({ length: 5 }, (_, i) => ({ id: `q-${i}`, text: `Sample Question ${i+1}: What is survey sampling?`, options: ["A","B (correct)","C","D"], correct_answer: 1, bloom_level: "understand", difficulty_beta: 0 })));
-    });
+    async function loadExam() {
+      setLoading(true);
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) { router.push("/login"); return; }
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
+        const start = await fetch(`${apiUrl}/api/assessments/start`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+          body: JSON.stringify({ course_id: assessmentId }),
+        });
+        const startData = await start.json().catch(() => ({}));
+        if (!start.ok) throw new Error(startData.error || "Could not start the course exam");
+        setAttemptId(startData.data?.attempt_id || null);
+
+        const generated = await fetch(`${apiUrl}/api/ai/quiz/generate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+          body: JSON.stringify({ course_id: assessmentId, question_count: 10, bloom_levels: ["understand", "apply", "analyze", "evaluate"], difficulty: 0, adaptive: false }),
+        });
+        const generatedData = await generated.json().catch(() => ({}));
+        if (!generated.ok || !generatedData.data?.questions?.length) throw new Error(generatedData.error || "Could not generate questions from course materials");
+        setQuestions(generatedData.data.questions);
+      } catch (err: any) {
+        setError(err.message || "Could not load the course exam");
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadExam();
   }, [supabase]);
 
   useEffect(() => {
@@ -34,14 +63,20 @@ export default function QuizPage() {
 
   const handleSubmit = async () => {
     setSubmitting(true);
-    const payload = Object.entries(answers).map(([question_id, selected_option])=>({ question_id, selected_option }));
+    const payload = Object.entries(answers).map(([question_id, answer_index]) => ({
+      question_id,
+      answer_index,
+      time_taken_seconds: 0,
+      correct_answer: questions.find(q => q.id === question_id)?.correct_answer,
+    }));
     // Try backend then fallback to direct supabase
     try {
-      const token = localStorage.getItem("sb-token") || "";
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/assessments/${assessmentId}/submit`, {
+      const session = (await supabase.auth.getSession()).data.session;
+      const token = session?.access_token || "";
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/assessments/submit`, {
         method: "POST",
         headers: { "Content-Type":"application/json", "Authorization": `Bearer ${token}` },
-        body: JSON.stringify({ answers: payload, tab_switch_count: tabSwitches, fullscreen_exits: fullscreenExits, time_taken_seconds: 1800-timeLeft })
+        body: JSON.stringify({ attempt_id: attemptId, answers: payload, tab_switch_count: tabSwitches, fullscreen_exits: fullscreenExits, time_taken_seconds: 1800-timeLeft })
       });
       if (res.ok) {
         const j = await res.json();
@@ -75,7 +110,9 @@ export default function QuizPage() {
         </div>
       </div>
       <div className="bg-amber-50 border border-amber-200 rounded p-3 text-xs">Telemetry active: Tab switches {tabSwitches} | Fullscreen exits {fullscreenExits} | Copy/paste blocked | Right-click disabled</div>
-      {questions.map((q, idx)=>(
+      {loading && <div className="bg-white border rounded-lg p-6 text-center">Generating your exam from the course PDFs, notes, videos and other materials...</div>}
+      {error && <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-4">{error}</div>}
+      {!loading && !error && questions.map((q, idx)=>(
         <div key={q.id} className="bg-white rounded-lg p-4 border">
           <p className="font-medium text-sm mb-1">Q{idx+1} <span className="text-xs bg-slate-100 px-1 rounded">{q.bloom_level}</span> <span className="text-xs text-slate-400">β={q.difficulty_beta}</span></p>
           <p className="mb-3">{q.text}</p>
@@ -89,7 +126,7 @@ export default function QuizPage() {
           </div>
         </div>
       ))}
-      <button onClick={handleSubmit} disabled={submitting} className="w-full bg-[#1e40af] text-white py-3 rounded-lg font-medium hover:bg-[#1e3a8a] disabled:opacity-50">{submitting ? "Submitting..." : "Submit for Admin Review"}</button>
+      {!loading && !error && <button onClick={handleSubmit} disabled={submitting || !attemptId || Object.keys(answers).length !== questions.length} className="w-full bg-[#1e40af] text-white py-3 rounded-lg font-medium hover:bg-[#1e3a8a] disabled:opacity-50">{submitting ? "Submitting..." : "Submit Course Exam"}</button>}
     </div>
   );
 }

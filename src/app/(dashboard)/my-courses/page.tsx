@@ -340,7 +340,7 @@ export default function MyCoursesPage() {
                   )}
 
                   {/* Start Exam (Quiz) */}
-                  {enrollment.progress_percentage >= 80 && enrollment.status !== "completed" && (
+                  {enrollment.progress_percentage >= 80 && (
                     <Link
                       href={`/quiz/${enrollment.course_id}`}
                       className="btn btn-secondary flex items-center gap-2"

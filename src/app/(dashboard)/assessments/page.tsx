@@ -87,15 +87,9 @@ export default function AssessmentsPage() {
                 </div>
                 <div className="text-right">
                   <span className={`inline-flex items-center gap-1 px-2 py-1 rounded text-sm font-medium ${
-                    assessment.passed 
-                      ? "bg-green-100 text-green-700" 
-                      : "bg-red-100 text-red-700"
+                    assessment.status === "pending" ? "bg-yellow-100 text-yellow-700" : assessment.passed ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
                   }`}>
-                    {assessment.passed ? (
-                      <><CheckCircle className="w-4 h-4" /> Passed</>
-                    ) : (
-                      <><XCircle className="w-4 h-4" /> Failed</>
-                    )}
+                    {assessment.status === "pending" ? <><Clock className="w-4 h-4" /> Pending admin verification</> : assessment.passed ? <><CheckCircle className="w-4 h-4" /> Verified & locked</> : <><XCircle className="w-4 h-4" /> Rejected</>}
                   </span>
                 </div>
               </div>

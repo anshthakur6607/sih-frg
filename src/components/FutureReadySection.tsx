@@ -10,7 +10,7 @@ interface FutureSuggestion {
   id: string;
   title: string;
   why_this_matters: string;
-  target_competency: string;
+  target_competency: string | { name?: string };
   course_id: string;
   duration_hours?: number;
   provider?: string;
@@ -24,6 +24,8 @@ export default function FutureReadySection() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const supabase = createClient();
+  const competencyLabel = (value: FutureSuggestion["target_competency"]) =>
+    typeof value === "string" ? value : value?.name || "Target competency";
 
   const fetchSuggestions = useCallback(async () => {
     try {
@@ -116,7 +118,7 @@ export default function FutureReadySection() {
                 </p>
                 {s.target_competency && (
                   <span className="inline-block mt-1 px-2 py-0.5 bg-white/20 rounded text-[10px] font-medium text-white">
-                    {s.target_competency}
+                    {competencyLabel(s.target_competency)}
                   </span>
                 )}
               </div>
