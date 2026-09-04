@@ -91,12 +91,22 @@ export default function AdminPage() {
   const [prediction, setPrediction] = useState<Prediction | null>(null);
   const [selectedScenario, setSelectedScenario] = useState("training_10_percent");
   const [predicting, setPredicting] = useState(false);
-  const [activeTab, setActiveTab] = useState<"overview" | "competencies" | "reviews">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "competencies" | "des" | "reviews">("overview");
+  const [desHeatmap, setDesHeatmap] = useState<{ states:string[]; domains:string[]; heatmap:Record<string,Record<string,number>> }|null>(null);
   const supabase = createClient();
 
   useEffect(() => {
     fetchAdminData();
+    fetchDesHeatmap();
   }, [supabase]);
+
+  async function fetchDesHeatmap(){
+    try{
+      const token = (await supabase.auth.getSession()).data.session?.access_token;
+      const r = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/admin/des-heatmap`,{headers:{Authorization:`Bearer ${token||""}`}});
+      const j = await r.json(); if(j.success) setDesHeatmap(j.data);
+    }catch(e){ console.warn("des heatmap",e); }
+  }
 
   async function fetchAdminData() {
     setLoading(true);
@@ -181,11 +191,12 @@ export default function AdminPage() {
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex gap-2 border-b border-surface-200">
+       {/* Tabs */}
+      <div className="flex gap-2 border-b border-surface-200 overflow-x-auto">
         {[
           { value: "overview", label: "Overview", icon: BarChart3 },
           { value: "competencies", label: "Competency Analysis", icon: TrendingUp },
+          { value: "des", label: "DES State Heatmap", icon: Users },
           { value: "reviews", label: "Pending Reviews", icon: AlertTriangle },
         ].map((tab) => (
           <button
@@ -420,6 +431,46 @@ export default function AdminPage() {
               </tbody>
             </table>
           </div>
+          <p className="text-xs text-surface-400 mt-3">PDF Template 2: Departmental Competency Heatmap — also see DES State heatmap → next tab.</p>
+        </div>
+      )}
+
+      {/* DES State/District Heatmap — PDF Template 2 regional DES */}
+      {activeTab === "des" && (
+        <div className="bg-white rounded-lg shadow-md p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-surface-900 flex items-center gap-2"><Users className="w-5 h-5 text-primary-600" /> DES Regional Heatmap — State × Domain (PDF Pointer)</h3>
+            <span className="text-xs bg-primary-50 text-primary-700 px-2 py-1 rounded">DES: Directorate of Economics & Statistics</span>
+          </div>
+          <p className="text-surface-600 mb-4 text-sm">MoSPI directors see skill gaps across state directorates. Red &lt;2.5, Yellow 2.5-3.5, Green &gt;3.5. Data from <code>profiles.state</code> × <code>user_competency_scores</code> → <code>des_competency_heatmap</code> view.</p>
+          {!desHeatmap ? <div className="h-32 flex items-center justify-center text-surface-400">Loading DES heatmap...</div> : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-surface-200">
+                    <th className="text-left py-3 px-4 font-medium text-surface-700">DES State</th>
+                    {(desHeatmap.domains || ["Statistical","Technical","Digital Governance","Behavioural"]).map(d=>(
+                      <th key={d} className="text-center py-3 px-4 font-medium text-surface-700">{d}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {desHeatmap.states.map(state=>(
+                    <tr key={state} className="border-b border-surface-100 hover:bg-surface-50">
+                      <td className="py-3 px-4 font-medium text-surface-900">{state}</td>
+                      {(desHeatmap.domains || []).map(dom=>{
+                        const v = desHeatmap.heatmap[state]?.[dom];
+                        const bg = v==null ? "bg-surface-100 text-surface-400" : v<2.5 ? "bg-red-100 text-red-700" : v<3.5 ? "bg-yellow-100 text-yellow-700" : "bg-green-100 text-green-700";
+                        return <td key={dom} className="py-3 px-4 text-center"><span className={`px-2 py-1 rounded text-xs font-medium ${bg}`}>{v!=null? v.toFixed(1): "-"}</span></td>;
+                      })}
+                    </tr>
+                  ))}
+                  {!desHeatmap.states.length && <tr><td colSpan={5} className="text-center py-6 text-surface-400">No DES data — run 009_qr_passes_and_des_heatmap.sql to seed states</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p className="text-xs text-surface-400 mt-3">Tip: This table is the PDF&apos;s <b>Departmental Competency Heatmap</b> at DES granularity — use screenshot for Slide 2.</p>
         </div>
       )}
 

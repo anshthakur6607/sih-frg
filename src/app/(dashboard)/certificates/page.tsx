@@ -116,18 +116,31 @@ export default function CertificatesPage() {
                 </div>
 
                 <div className="mt-4 pt-4 border-t border-surface-100">
-                  <p className="text-xs text-surface-500 mb-2">Verification Code</p>
-                  <div className="flex items-center gap-2">
-                    <code className="flex-1 bg-surface-50 px-3 py-2 rounded text-sm font-mono">
-                      {cert.verification_code}
-                    </code>
-                    <button
-                      onClick={() => handleVerify(cert.verification_code)}
-                      className="p-2 text-primary-600 hover:bg-primary-50 rounded"
-                      title="Verify Certificate"
-                    >
-                      <ExternalLink className="w-4 h-4" />
-                    </button>
+                  <p className="text-xs text-surface-500 mb-2">Verification Code • QR for official verification</p>
+                  <div className="flex items-start gap-3">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <code className="flex-1 bg-surface-50 px-3 py-2 rounded text-sm font-mono">
+                          {cert.verification_code}
+                        </code>
+                        <button
+                          onClick={() => handleVerify(cert.verification_code)}
+                          className="p-2 text-primary-600 hover:bg-primary-50 rounded"
+                          title="Verify Certificate"
+                        >
+                          <ExternalLink className="w-4 h-4" />
+                        </button>
+                      </div>
+                      <p className="text-[11px] text-surface-400 mt-1">Scan QR at field office to verify — tamper-proof skill-tied credential (PDF Template 2)</p>
+                    </div>
+                    <div className="shrink-0 bg-white border rounded p-1">
+                      <img
+                        src={`https://api.qrserver.com/v1/create-qr-code/?size=110x110&data=${encodeURIComponent(typeof window !== 'undefined' ? `${window.location.origin}/verify/${cert.verification_code}` : `https://skillup.mospi.gov.in/verify/${cert.verification_code}`)}`}
+                        alt="QR Code for certificate verification"
+                        className="w-[110px] h-[110px]"
+                        loading="lazy"
+                      />
+                    </div>
                   </div>
                 </div>
               </div>

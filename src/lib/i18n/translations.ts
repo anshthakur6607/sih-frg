@@ -34,6 +34,7 @@ export const translations: Record<LangCode, Record<string, string>> = {
     "nav.tpacCalendar": "NSSTA TPAC Calendar",
     "nav.assessmentHistory": "Assessment History",
     "nav.certificates": "Certificates",
+    "nav.passes": "ID Passes",
     "nav.competencies": "Competencies",
     "nav.settings": "Settings",
     "nav.signOut": "Sign Out",
