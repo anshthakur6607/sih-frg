@@ -86,7 +86,7 @@ const nextConfig: NextConfig = {
               "style-src 'self' 'unsafe-inline'",
               "img-src 'self' data: https: blob:",
               "font-src 'self'",
-              "connect-src 'self' http://localhost:3001 https://*.supabase.co wss://*.supabase.co https://*.googleapis.com ws://localhost:3001 wss://localhost:3001",
+              "connect-src 'self' http://localhost:3001 https://*.supabase.co wss://*.supabase.co https://*.googleapis.com ws://localhost:3001 wss://localhost:3001 https://brg-sable.vercel.app https://*.vercel.app https://*.onrender.com wss://brg-sable.vercel.app wss://*.vercel.app https://api.sarvam.ai",
               "frame-ancestors 'self'",
               "form-action 'self'",
               "base-uri 'self'",

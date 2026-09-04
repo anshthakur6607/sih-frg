@@ -7,7 +7,7 @@
  * Why: Some pages need flexible API calls that don't fit into the typed API modules.
  */
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001').replace(/\/$/, '');
 
 async function getAuthToken(): Promise<string | null> {
   if (typeof window === 'undefined') return null;

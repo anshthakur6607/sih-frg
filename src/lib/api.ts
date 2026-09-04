@@ -30,7 +30,7 @@ export class ApiError extends Error {
  * Base API URL
  * Defaults to localhost in development
  */
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001').replace(/\/$/, '');
 
 /**
  * Global flag: when `true` the frontend should display a maintenance/offline
