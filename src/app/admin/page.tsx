@@ -539,7 +539,7 @@ export default function AdminPage() {
                       })}
                     </tr>
                   ))}
-                  {!desHeatmap.states.length && <tr><td colSpan={5} className="text-center py-6 text-surface-400">No DES data — run 009_qr_passes_and_des_heatmap.sql to seed states</td></tr>}
+                  {!desHeatmap.states.length && <tr><td colSpan={5} className="text-center py-6 text-surface-400">No DES data — ensure profiles.state is set and assessments are complete</td></tr>}
                 </tbody>
               </table>
             </div>

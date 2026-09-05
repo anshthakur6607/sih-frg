@@ -57,7 +57,6 @@ const NAV_CONFIG: Array<{ href: string; key: string; icon: any }> = [
   { href: "/competencies", key: "nav.competencies", icon: TrendingUp },
   { href: "/quiz-generator", key: "nav.quizGenerator", icon: FileText },
   { href: "/ai-tutor", key: "nav.aiTutor", icon: MessageSquare },
-  { href: "/passes", key: "nav.passes", icon: Award },
   { href: "/gamification", key: "nav.progress", icon: Trophy },
   { href: "/roadmap", key: "nav.roadmap", icon: Map },
   { href: "/tpac-calendar", key: "nav.tpacCalendar", icon: Building },

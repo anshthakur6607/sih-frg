@@ -10,20 +10,21 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { 
-  TrendingUp, 
-  Target, 
-  BookOpen, 
-  Award, 
-  Clock, 
+import {
+  TrendingUp,
+  Target,
+  BookOpen,
+  Award,
+  Clock,
   CheckCircle,
   AlertTriangle,
   ArrowRight,
   BarChart3,
   Users,
-  Sparkles
+  Sparkles,
+  RefreshCw
 } from "lucide-react";
 import { createClient } from "@/lib/supabase";
 import CompetencyRadarChart from "@/components/CompetencyRadarChart";
@@ -112,29 +113,28 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [hasSurvey, setHasSurvey] = useState(true);
-  const supabase = createClient();
+  const [refreshing, setRefreshing] = useState(false);
+  const supabase = useMemo(() => createClient(), []);
 
-  /**
-   * Fetch dashboard data
-   */
-  useEffect(() => {
-    async function fetchDashboard() {
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return;
+  const fetchDashboard = useCallback(async (isManual = false) => {
+    if (isManual) setRefreshing(true);
+    setError(null);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
 
-        // Check if user has completed survey
-        const { data: survey } = await supabase
-          .from("surveys")
-          .select("id")
-          .eq("user_id", user.id)
-          .maybeSingle();
-        setHasSurvey(!!survey);
+      // Check if user has completed survey
+      const { data: survey } = await supabase
+        .from("surveys")
+        .select("id")
+        .eq("user_id", user.id)
+        .maybeSingle();
+      setHasSurvey(!!survey);
 
-        // Fetch competency gaps
-        const { data: gapsData } = await supabase
-          .from("user_competency_scores")
-          .select(`
+      // Fetch competency gaps
+      const { data: gapsData } = await supabase
+        .from("user_competency_scores")
+        .select(`
             *,
             competency:competencies(
               id, name,
@@ -177,9 +177,15 @@ export default function DashboardPage() {
           .select("id")
           .eq("user_id", user.id);
 
-        // Process data
-        const scores = (gapsData || []) as CompetencyScore[];
-        
+        // Process data — normalize nulls (gap_score GENERATED can arrive null; fall back to required-current)
+        const scores = ((gapsData || []) as CompetencyScore[]).map((s) => {
+          const current = Number(s.current_score) || 0;
+          const required = Number(s.required_score) || 0;
+          const gapRaw = s.gap_score == null ? required - current : Number(s.gap_score);
+          const gap = Number.isFinite(gapRaw) ? gapRaw : 0;
+          return { ...s, current_score: current, required_score: required, gap_score: gap };
+        });
+
         const highGaps = scores.filter(s => s.gap_score >= 2.0);
         const mediumGaps = scores.filter(s => s.gap_score >= 1.0 && s.gap_score < 2.0);
         const achievedGaps = scores.filter(s => s.gap_score < 1.0);
@@ -288,11 +294,33 @@ export default function DashboardPage() {
         setError("Failed to load dashboard data");
       } finally {
         setLoading(false);
+        setRefreshing(false);
       }
-    }
+    }, [supabase]);
 
+  useEffect(() => {
     fetchDashboard();
-  }, [supabase]);
+    // Poll every 30s so graphs pick up new assessment / survey scores
+    const id = setInterval(() => fetchDashboard(), 30000);
+    const onFocus = () => fetchDashboard();
+    window.addEventListener("focus", onFocus);
+    // Realtime: refetch when own scores / attempts change
+    let channel: any = null;
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      channel = supabase
+        .channel(`dashboard-scores-${user.id}`)
+        .on("postgres_changes", { event: "*", schema: "public", table: "user_competency_scores", filter: `user_id=eq.${user.id}` }, () => fetchDashboard())
+        .on("postgres_changes", { event: "*", schema: "public", table: "assessment_attempts", filter: `user_id=eq.${user.id}` }, () => fetchDashboard())
+        .subscribe();
+    })();
+    return () => {
+      clearInterval(id);
+      window.removeEventListener("focus", onFocus);
+      if (channel) supabase.removeChannel(channel);
+    };
+  }, [fetchDashboard, supabase]);
 
   if (loading) {
     return (
@@ -345,6 +373,15 @@ export default function DashboardPage() {
           <p className="text-surface-600">{t("dashboard.subtitle")}</p>
         </div>
         <div className="flex gap-2">
+          <button
+            onClick={() => fetchDashboard(true)}
+            disabled={refreshing}
+            className="btn btn-secondary inline-flex items-center gap-2 disabled:opacity-50"
+            title="Refresh graphs from live scores (auto-refreshes every 30s)"
+          >
+            <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
+            {refreshing ? "Refreshing..." : "Refresh"}
+          </button>
           <Link href="/survey" className="btn btn-secondary inline-flex items-center gap-2">
             <Sparkles className="w-4 h-4" />
             {hasSurvey ? "Retake Survey" : "Take Survey"}
@@ -396,6 +433,9 @@ export default function DashboardPage() {
           {/* Domain Progress Bars — real average_score per domain */}
           <div className="bg-surface-50 rounded-xl p-4 border">
             <h4 className="text-sm font-semibold text-surface-800 mb-3 flex items-center gap-2"><BarChart3 className="w-4 h-4 text-primary-600" /> Avg Score by Domain</h4>
+            {(!data?.domain_progress || data.domain_progress.length === 0) && (
+              <p className="text-xs text-surface-500 mb-2">No scores yet — complete the survey or an assessment and hit Refresh.</p>
+            )}
             <div className="h-[220px]">
               <RContainer width="100%" height="100%">
                 <RBarChart data={data?.domain_progress || []} layout="vertical" margin={{ left: 20, right: 20 }}>
@@ -428,6 +468,9 @@ export default function DashboardPage() {
           {/* Gap Distribution Pie — real counts from gap_score thresholds */}
           <div className="bg-surface-50 rounded-xl p-4 border">
             <h4 className="text-sm font-semibold text-surface-800 mb-3 flex items-center gap-2"><Target className="w-4 h-4 text-accent-600" /> Skill Gap Distribution</h4>
+            {((data?.gaps.high.length || 0) + (data?.gaps.medium.length || 0) + (data?.gaps.achieved.length || 0) === 0) && (
+              <p className="text-xs text-surface-500 mb-2">No gap data yet — complete the survey or an assessment and hit Refresh.</p>
+            )}
             <div className="h-[220px]">
               <RContainer width="100%" height="100%">
                 <RPieChart>
@@ -436,7 +479,7 @@ export default function DashboardPage() {
                       { name: "High Gap (≥2)", value: data?.gaps.high.length || 0, fill: "#ef4444" },
                       { name: "Medium (1-2)", value: data?.gaps.medium.length || 0, fill: "#f59e0b" },
                       { name: "Achieved (<1)", value: data?.gaps.achieved.length || 0, fill: "#10b981" },
-                    ].filter(d => d.value > 0)}
+                    ]}
                     dataKey="value"
                     nameKey="name"
                     cx="50%"
@@ -448,9 +491,9 @@ export default function DashboardPage() {
                     labelLine={false}
                   >
                     {[
-                      { fill: "#ef4444" },
-                      { fill: "#f59e0b" },
-                      { fill: "#10b981" },
+                      { name: "High Gap (≥2)", value: data?.gaps.high.length || 0, fill: "#ef4444" },
+                      { name: "Medium (1-2)", value: data?.gaps.medium.length || 0, fill: "#f59e0b" },
+                      { name: "Achieved (<1)", value: data?.gaps.achieved.length || 0, fill: "#10b981" },
                     ].map((c, i) => (
                       <RCell key={i} fill={c.fill} />
                     ))}
