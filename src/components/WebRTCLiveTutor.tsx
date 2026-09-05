@@ -36,6 +36,7 @@ export default function WebRTCLiveTutor({ courseId, moduleId, videoTimestamp, pr
   useEffect(()=>{ if(preferredLanguage) setLanguage(preferredLanguage); },[preferredLanguage]);
 
   const wsRef = useRef<WebSocket | null>(null);
+  const triedFallbackRef = useRef(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const playbackCtxRef = useRef<AudioContext | null>(null);
@@ -54,6 +55,14 @@ export default function WebRTCLiveTutor({ courseId, moduleId, videoTimestamp, pr
     } catch {
       return `ws://127.0.0.1:3001/ws/live-tutor?token=${encodeURIComponent(token)}`;
     }
+  };
+
+  const fallbackWsUrl = (token: string) => {
+    // If explicitly provided, use NEXT_PUBLIC_AI_SERVICE_WS (should be wss://host[:port])
+    const explicit = process.env.NEXT_PUBLIC_AI_SERVICE_WS;
+    if (explicit && explicit.length > 0) return `${explicit.replace(/\/$/, '')}/ws/live-tutor?token=${encodeURIComponent(token)}`;
+    // Local AI service default for dev
+    return `ws://127.0.0.1:8001/ws/live-tutor?token=${encodeURIComponent(token)}`;
   };
 
   const enqueuePcm = async (b64: string) => {
@@ -94,6 +103,25 @@ export default function WebRTCLiveTutor({ courseId, moduleId, videoTimestamp, pr
       const ws = new WebSocket(wsUrl);
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
+      // If primary fails (e.g. deployed host doesn't support WS upgrades like Vercel serverless),
+      // attempt a fallback to an explicitly configured AI WS host or localhost:8001.
+      ws.onerror = async () => {
+        if (triedFallbackRef.current) return;
+        triedFallbackRef.current = true;
+        try {
+          const fallback = fallbackWsUrl(token);
+          console.warn('WebSocket primary failed — attempting fallback:', fallback);
+          const ws2 = new WebSocket(fallback);
+          ws2.binaryType = 'arraybuffer';
+          wsRef.current = ws2;
+          ws2.onopen = ws.onopen;
+          ws2.onmessage = ws.onmessage;
+          ws2.onclose = ws.onclose;
+          ws2.onerror = () => { setError('WebSocket failed. Backend and fallback unreachable.'); setConnecting(false); };
+        } catch (e:any) {
+          setError('WebSocket failed. Backend unreachable.'); setConnecting(false);
+        }
+      };
       ws.onopen = () => {
         setConnected(true); setConnecting(false); setError(null);
         ws.send(JSON.stringify({ type: "init", course_id: courseId, module_id: moduleId, video_timestamp: videoTimestamp, language, course_title: courseTitle || undefined }));
