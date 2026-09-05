@@ -268,7 +268,7 @@ export default function SurveyPage() {
         return {
           id: String(q?.id ?? `mini-q-${idx + 1}`),
           text: String(q?.text ?? `Question ${idx + 1}`),
-          options: safeOptions.map((opt) => String(opt)),
+          options: safeOptions.map((opt: string) => String(opt)),
           correct_answer: Math.max(0, Math.min(safeOptions.length - 1, correctAnswer)),
           explanation: String(q?.explanation ?? 'This answer follows the supported learning material.'),
         };
