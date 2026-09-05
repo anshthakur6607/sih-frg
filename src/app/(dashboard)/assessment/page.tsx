@@ -58,6 +58,31 @@ export default function AssessmentPage() {
   const [profile, setProfile] = useState<any>(null);
   const supabase = createClient();
 
+  const normalizeAssessmentResult = (payload: any): AssessmentResult | null => {
+    const data = payload?.data ?? payload;
+    if (!data || typeof data !== 'object') return null;
+
+    const summary = data.summary ?? {};
+    const gaps = data.gaps ?? {};
+    const domainProgress = Array.isArray(data.domain_progress) ? data.domain_progress : [];
+
+    return {
+      overall_progress: Number(data.overall_progress ?? 0),
+      summary: {
+        high_gap_count: Number(summary.high_gap_count ?? 0),
+        medium_gap_count: Number(summary.medium_gap_count ?? 0),
+        achieved_count: Number(summary.achieved_count ?? 0),
+        total_competencies: Number(summary.total_competencies ?? 0),
+      },
+      gaps: {
+        high: Array.isArray(gaps.high) ? gaps.high : [],
+        medium: Array.isArray(gaps.medium) ? gaps.medium : [],
+        achieved: Array.isArray(gaps.achieved) ? gaps.achieved : [],
+      },
+      domain_progress: domainProgress,
+    };
+  };
+
   useEffect(() => {
     async function loadProfile() {
       const { data: { user } } = await supabase.auth.getUser();
@@ -76,8 +101,9 @@ export default function AssessmentPage() {
         setAssessed(true);
         // Fetch existing gaps
         const gapsData = await competencyApi.getGaps();
-        if (gapsData && typeof gapsData === 'object') {
-          setResult(gapsData as any);
+        const normalized = normalizeAssessmentResult(gapsData);
+        if (normalized) {
+          setResult(normalized);
         }
       }
     }
@@ -91,7 +117,8 @@ export default function AssessmentPage() {
       await competencyApi.assess();
       // Fetch the updated gaps
       const gapsResponse = await competencyApi.getGaps();
-      if (gapsResponse) setResult(gapsResponse as any);
+      const normalized = normalizeAssessmentResult(gapsResponse);
+      if (normalized) setResult(normalized);
       setAssessed(true);
     } catch (err: any) {
       setError(err?.response?.data?.error || "Failed to run assessment");
@@ -106,7 +133,8 @@ export default function AssessmentPage() {
     try {
       await competencyApi.assess();
       const gapsResponse = await competencyApi.getGaps();
-      if (gapsResponse) setResult(gapsResponse as any);
+      const normalized = normalizeAssessmentResult(gapsResponse);
+      if (normalized) setResult(normalized);
     } catch (err: any) {
       setError(err?.response?.data?.error || "Failed to run re-assessment");
     } finally {

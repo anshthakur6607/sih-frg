@@ -90,8 +90,15 @@ export default function CompetenciesPage() {
         throw new Error(`Failed to fetch competencies: ${response.status}`);
       }
 
-      const data = await response.json();
-      setCompetencies(data.competencies || data || []);
+      const payload = await response.json();
+      const items = Array.isArray(payload?.competencies)
+        ? payload.competencies
+        : Array.isArray(payload?.data)
+          ? payload.data
+          : Array.isArray(payload)
+            ? payload
+            : [];
+      setCompetencies(items as CompetencyScore[]);
     } catch (err) {
       console.error("Error fetching competencies:", err);
       setError(err instanceof Error ? err.message : "Failed to load competencies");
@@ -116,8 +123,13 @@ export default function CompetenciesPage() {
     return { bg: 'bg-green-50', border: 'border-green-200', text: 'text-green-700', badge: 'bg-green-100 text-green-700' };
   };
 
-  const groupedByDomain: Record<string, DomainGroup> = (competencies as CompetencyScore[]).reduce((acc, item) => {
-    const domain = item.competency_domain?.name || "Unknown";
+  const normalizedCompetencies = Array.isArray(competencies) ? competencies : [];
+
+  const groupedByDomain: Record<string, DomainGroup> = normalizedCompetencies.reduce((acc, item) => {
+    const rawDomain = item.competency_domain?.name ?? item.competency?.domain ?? "Unknown";
+    const domain = typeof rawDomain === "string" && rawDomain.trim().length > 0
+      ? rawDomain
+      : "Unknown";
     const gap = item.required_score - item.current_score;
 
     if (!acc[domain]) {
@@ -131,7 +143,9 @@ export default function CompetenciesPage() {
 
     acc[domain].competencies.push({
       competency_id: item.competency_id,
-      name: item.competency?.name || "Unknown",
+      name: typeof item.competency?.name === "string" && item.competency.name.length > 0
+        ? item.competency.name
+        : "Unknown",
       current_score: item.current_score,
       required_score: item.required_score,
       gap_score: gap,
@@ -320,7 +334,9 @@ export default function CompetenciesPage() {
         {Object.values(groupedByDomain).map((domainGroup) => (
           <div key={domainGroup.domain} className="bg-white rounded-lg shadow-md p-6">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-surface-900">{domainGroup.domain}</h3>
+              <h3 className="text-lg font-semibold text-surface-900">
+                {typeof domainGroup.domain === "string" ? domainGroup.domain : "Unknown"}
+              </h3>
               <div className={`px-3 py-1 rounded-full text-sm font-medium ${
                 domainGroup.average_score >= domainGroup.required_average 
                   ? 'bg-green-100 text-green-700' 
@@ -336,12 +352,14 @@ export default function CompetenciesPage() {
                 const progress = (comp.current_score / comp.required_score) * 100;
                 
                 return (
-                  <div 
+                  <div
                     key={comp.competency_id}
                     className={`p-4 rounded-lg border ${colors.bg} ${colors.border}`}
                   >
                     <div className="flex items-center justify-between mb-2">
-                      <span className="font-medium text-surface-900">{comp.name}</span>
+                      <span className="font-medium text-surface-900">
+                        {typeof comp.name === "string" ? comp.name : "Unknown"}
+                      </span>
                       <span className={`px-2 py-0.5 rounded text-xs font-medium ${colors.badge}`}>
                         Gap: {comp.gap_score.toFixed(1)}
                       </span>

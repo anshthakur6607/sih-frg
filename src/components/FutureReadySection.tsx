@@ -39,8 +39,30 @@ export default function FutureReadySection() {
 
       if (res.ok) {
         const data = await res.json();
-        const list: FutureSuggestion[] = data.data || data || [];
-        setSuggestions(list.slice(0, 5));
+        const payload = Array.isArray(data?.data)
+          ? data.data
+          : Array.isArray(data?.data?.suggestions)
+            ? data.data.suggestions
+            : Array.isArray(data?.suggestions)
+              ? data.suggestions
+              : [];
+
+        const normalized = payload.map((item: any, index: number) => {
+          const rawId = item?.id || item?.course_id || item?.course_title || item?.title || item?.name || "";
+          const safeId = String(rawId).trim();
+          const title = item?.title || item?.course_title || item?.name || `Suggested course ${index + 1}`;
+          return {
+            id: safeId || `future-ready-${index}`,
+            title,
+            why_this_matters: item?.why_this_matters || item?.reason || item?.why || "",
+            target_competency: item?.target_competency || item?.competencies_gained?.[0] || "",
+            course_id: item?.course_id || item?.id || item?.course_title || title,
+            duration_hours: item?.duration_hours,
+            provider: item?.provider,
+          };
+        });
+
+        setSuggestions(normalized.slice(0, 5));
       }
     } catch (err) {
       console.error("Failed to fetch daily suggestions:", err);
@@ -101,9 +123,9 @@ export default function FutureReadySection() {
       </div>
 
       <div className="p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {suggestions.map((s) => (
+        {suggestions.map((s, index) => (
           <div
-            key={s.id}
+            key={`future-ready-${String(s.id || s.title || "item").replace(/[^a-zA-Z0-9_-]/g, "") || "item"}-${index}`}
             className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-lg p-4 hover:bg-white/15 transition-colors"
           >
             <div className="flex items-start gap-3 mb-3">

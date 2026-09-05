@@ -455,8 +455,12 @@ export default function DashboardPage() {
               {data.gaps.high.slice(0, 3).map((gap, idx) => (
                 <div key={idx} className="flex items-center justify-between p-3 bg-red-50 rounded-lg border border-red-100">
                   <div>
-                    <p className="font-medium text-surface-900">{gap.competency?.name}</p>
-                    <p className="text-xs text-surface-500">{gap.competency?.domain?.name}</p>
+                    <p className="font-medium text-surface-900">
+                      {typeof gap.competency?.name === "string" ? gap.competency.name : "Unknown competency"}
+                    </p>
+                    <p className="text-xs text-surface-500">
+                      {typeof gap.competency?.domain?.name === "string" ? gap.competency.domain.name : "Uncategorized"}
+                    </p>
                   </div>
                   <div className="text-right">
                     <span className="text-sm font-medium text-red-700">
