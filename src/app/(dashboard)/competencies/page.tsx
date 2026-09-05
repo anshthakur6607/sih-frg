@@ -23,6 +23,10 @@ interface CompetencyScore {
     id: string; 
     name: string; 
     domain_id: string;
+    domain?: {
+      id: string;
+      name: string;
+    };
   };
   competency_domain?: { 
     id: string; 

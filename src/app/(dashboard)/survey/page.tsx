@@ -791,7 +791,7 @@ export default function SurveyPage() {
                         <span className="text-primary-600 mr-2">Q{idx + 1}.</span>{q.text}
                       </p>
                       <div className="space-y-1.5">
-                        {q.options.map((opt, oi) => {
+                        {q.options.map((opt: string, oi: number) => {
                           const selected = miniQuizAnswers[q.id] === oi;
                           return (
                             <button
