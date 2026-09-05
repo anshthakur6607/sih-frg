@@ -27,7 +27,7 @@ import { competencyApi } from "@/lib/api";
 interface CompetencyScore {
   id: string;
   name: string;
-  domain: string | { name?: string };
+  domain: string;
   current_score: number;
   required_score: number;
   gap_score: number;
@@ -58,39 +58,53 @@ export default function AssessmentPage() {
   const [profile, setProfile] = useState<any>(null);
   const supabase = createClient();
 
+  const normalizeAssessmentResult = (payload: any): AssessmentResult | null => {
+    const data = payload?.data ?? payload;
+    if (!data || typeof data !== 'object') return null;
+
+    const summary = data.summary ?? {};
+    const gaps = data.gaps ?? {};
+    const domainProgress = Array.isArray(data.domain_progress) ? data.domain_progress : [];
+
+    return {
+      overall_progress: Number(data.overall_progress ?? 0),
+      summary: {
+        high_gap_count: Number(summary.high_gap_count ?? 0),
+        medium_gap_count: Number(summary.medium_gap_count ?? 0),
+        achieved_count: Number(summary.achieved_count ?? 0),
+        total_competencies: Number(summary.total_competencies ?? 0),
+      },
+      gaps: {
+        high: Array.isArray(gaps.high) ? gaps.high : [],
+        medium: Array.isArray(gaps.medium) ? gaps.medium : [],
+        achieved: Array.isArray(gaps.achieved) ? gaps.achieved : [],
+      },
+      domain_progress: domainProgress,
+    };
+  };
+
   useEffect(() => {
     async function loadProfile() {
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) { router.push("/login"); return; }
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) { router.push("/login"); return; }
 
-        const { data, error: profileError } = await supabase
-          .from("profiles")
-          .select("*")
-          .eq("id", user.id)
-          .single();
-        if (profileError) throw profileError;
-        setProfile(data);
+      const { data } = await supabase.from("profiles").select("*").eq("id", user.id).single();
+      setProfile(data);
 
-        // Check if already assessed
-        const { data: scores, error: scoresError } = await supabase
-          .from("user_competency_scores")
-          .select("*")
-          .eq("user_id", user.id);
-        if (scoresError) throw scoresError;
-
-        if (scores && scores.length > 0) {
-          setAssessed(true);
-          // API responses are wrapped in { success, data }.
-          const gapsResponse = await competencyApi.getGaps();
-          const gapsData = (gapsResponse as any)?.data ?? gapsResponse;
-          if (gapsData && typeof gapsData === 'object') {
-            setResult(gapsData as AssessmentResult);
-          }
+      // Check if already assessed
+      const { data: scores } = await supabase
+        .from("user_competency_scores")
+        .select("*")
+        .eq("user_id", user.id);
+      
+      if (scores && scores.length > 0) {
+        setAssessed(true);
+        // Fetch existing gaps
+        const gapsData = await competencyApi.getGaps();
+        const normalized = normalizeAssessmentResult(gapsData);
+        if (normalized) {
+          setResult(normalized);
         }
-      } catch (err: any) {
-        console.error("Failed to load assessment:", err);
-        setError(err?.message || "Failed to load your assessment");
       }
     }
     loadProfile();
@@ -103,11 +117,11 @@ export default function AssessmentPage() {
       await competencyApi.assess();
       // Fetch the updated gaps
       const gapsResponse = await competencyApi.getGaps();
-      const gapsData = (gapsResponse as any)?.data ?? gapsResponse;
-      if (gapsData) setResult(gapsData as AssessmentResult);
+      const normalized = normalizeAssessmentResult(gapsResponse);
+      if (normalized) setResult(normalized);
       setAssessed(true);
     } catch (err: any) {
-      setError(err?.message || "Failed to run assessment");
+      setError(err?.response?.data?.error || "Failed to run assessment");
     } finally {
       setAssessing(false);
     }
@@ -119,10 +133,10 @@ export default function AssessmentPage() {
     try {
       await competencyApi.assess();
       const gapsResponse = await competencyApi.getGaps();
-      const gapsData = (gapsResponse as any)?.data ?? gapsResponse;
-      if (gapsData) setResult(gapsData as AssessmentResult);
+      const normalized = normalizeAssessmentResult(gapsResponse);
+      if (normalized) setResult(normalized);
     } catch (err: any) {
-      setError(err?.message || "Failed to run re-assessment");
+      setError(err?.response?.data?.error || "Failed to run re-assessment");
     } finally {
       setAssessing(false);
     }
@@ -137,9 +151,6 @@ export default function AssessmentPage() {
     };
     return colors[domain] || "#6b7280";
   };
-
-  const getCompetencyDomain = (domain: CompetencyScore["domain"]) =>
-    typeof domain === "string" ? domain : domain?.name || "Unknown";
 
   if (!profile) {
     return (
@@ -198,12 +209,6 @@ export default function AssessmentPage() {
             <p className="font-medium">{profile.education || "Not set"}</p>
           </div>
         </div>
-        {error && (
-          <div className="mt-4 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-red-700">
-            <AlertCircle className="h-5 w-5 shrink-0" />
-            <span>{error}</span>
-          </div>
-        )}
       </div>
 
       {/* Assessment Action */}
@@ -326,7 +331,7 @@ export default function AssessmentPage() {
                           </span>
                           <div>
                             <p className="font-medium text-surface-900">{gap.name}</p>
-                            <p className="text-xs text-surface-500">{getCompetencyDomain(gap.domain)}</p>
+                            <p className="text-xs text-surface-500">{gap.domain}</p>
                           </div>
                         </div>
                         <div className="text-right">
