@@ -29,7 +29,7 @@ export default function QuizPage() {
       try {
         const { data: { session } } = await supabase.auth.getSession();
         if (!session) { router.push("/login"); return; }
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
+        const apiUrl = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001").replace(/\/$/, "");
         const start = await fetch(`${apiUrl}/api/assessments/start`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
@@ -73,7 +73,7 @@ export default function QuizPage() {
     try {
       const session = (await supabase.auth.getSession()).data.session;
       const token = session?.access_token || "";
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/assessments/submit`, {
+      const res = await fetch(`${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001").replace(/\/$/, "")}/api/assessments/submit`, {
         method: "POST",
         headers: { "Content-Type":"application/json", "Authorization": `Bearer ${token}` },
         body: JSON.stringify({ attempt_id: attemptId, answers: payload, tab_switch_count: tabSwitches, fullscreen_exits: fullscreenExits, time_taken_seconds: 1800-timeLeft })

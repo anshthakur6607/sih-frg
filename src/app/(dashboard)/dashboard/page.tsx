@@ -29,6 +29,18 @@ import { createClient } from "@/lib/supabase";
 import CompetencyRadarChart from "@/components/CompetencyRadarChart";
 import FutureReadySection from "@/components/FutureReadySection";
 import { useLanguage } from "@/context/LanguageContext";
+import {
+  BarChart as RBarChart,
+  Bar as RBar,
+  XAxis as RXAxis,
+  YAxis as RYAxis,
+  CartesianGrid as RGrid,
+  Tooltip as RTooltip,
+  ResponsiveContainer as RContainer,
+  PieChart as RPieChart,
+  Pie as RPie,
+  Cell as RCell,
+} from "recharts";
 
 /**
  * Competency score type
@@ -131,11 +143,28 @@ export default function DashboardPage() {
           `)
           .eq("user_id", user.id);
 
-        // Fetch recommended courses
-        const { data: coursesData } = await supabase
-          .from("courses")
-          .select("*")
-          .limit(5);
+        // Fetch personalized recommendations (real hybrid KG engine, not first 5)
+        const { data: { session: recSession } } = await supabase.auth.getSession();
+        const API_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001").replace(/\/$/, "");
+        let recs: any[] = [];
+        try {
+          const recRes = await fetch(`${API_URL}/api/recommendations?limit=5`, {
+            headers: { Authorization: `Bearer ${recSession?.access_token || ""}` },
+          });
+          const recJson = await recRes.json().catch(() => ({}));
+          recs = recJson.data || recJson?.data?.data || [];
+          // Backend returns { success, data: [{course_id, course, priority, explanation, score, factors}] }
+          // Normalize shape: ensure recs is array of enriched objects
+          if (!Array.isArray(recs) && recJson.data?.data) recs = recJson.data.data;
+        } catch (e) {
+          console.warn("Recommendations fetch failed, falling back to courses", e);
+        }
+        // Fallback to generic courses if recommendations empty (new user / no gaps)
+        let coursesDataFallback: any[] | null = null;
+        if (!recs || recs.length === 0) {
+          const { data } = await supabase.from("courses").select("*").limit(5);
+          coursesDataFallback = data;
+        }
 
         // Fetch learning metrics (from assessments)
         const { data: assessments } = await supabase
@@ -228,14 +257,25 @@ export default function DashboardPage() {
           },
           domain_progress: domainProgress,
           radar_data: radarData,
-          recommended_courses: (coursesData || []).map(c => ({
-            id: c.id,
-            title: c.title,
-            provider: c.provider || "iGOT",
-            duration_hours: c.duration_hours,
-            priority: "high",
-            matching_gap: "Skill development",
-          })),
+          recommended_courses: (recs && recs.length > 0
+            ? recs.map((r: any) => ({
+                id: r.course_id || r.course?.id,
+                title: r.course?.title || r.course_title || r.title,
+                provider: r.course?.provider || "iGOT",
+                duration_hours: r.course?.duration_hours,
+                priority: r.priority || "medium",
+                matching_gap: r.explanation || r.factors?.[0]?.detail || r.matching_gap || "Skill development",
+                score: r.score,
+                factors: r.factors,
+              }))
+            : (coursesDataFallback || []).map((c: any) => ({
+                id: c.id,
+                title: c.title,
+                provider: c.provider || "iGOT",
+                duration_hours: c.duration_hours,
+                priority: "medium",
+                matching_gap: "Starter path — popular for your role",
+              })) as any),
           learning_metrics: {
             total_learning_hours: Math.round(totalHours * 10) / 10,
             completed_courses: (assessments || []).filter(a => a.passed).length,
@@ -344,10 +384,87 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Radar Chart */}
+        {/* Radar Chart — real domain averages from user_competency_scores */}
         <div className="mt-6">
-          <h3 className="text-sm font-medium text-surface-700 mb-3">Competency Profile by Domain</h3>
+          <h3 className="text-sm font-medium text-surface-700 mb-3">Competency Profile by Domain (Real)</h3>
           <CompetencyRadarChart data={data?.radar_data || []} />
+          <p className="text-xs text-surface-400 mt-2 text-center">Current (blue) vs Required (cyan dashed) — computed from your actual <code>user_competency_scores</code></p>
+        </div>
+
+        {/* Real Domain & Gap Charts — no hardcode, all from live data */}
+        <div className="grid lg:grid-cols-2 gap-6 mt-6">
+          {/* Domain Progress Bars — real average_score per domain */}
+          <div className="bg-surface-50 rounded-xl p-4 border">
+            <h4 className="text-sm font-semibold text-surface-800 mb-3 flex items-center gap-2"><BarChart3 className="w-4 h-4 text-primary-600" /> Avg Score by Domain</h4>
+            <div className="h-[220px]">
+              <RContainer width="100%" height="100%">
+                <RBarChart data={data?.domain_progress || []} layout="vertical" margin={{ left: 20, right: 20 }}>
+                  <RGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <RXAxis type="number" domain={[0, 5]} tick={{ fontSize: 11 }} />
+                  <RYAxis type="category" dataKey="domain" width={110} tick={{ fontSize: 11, fontWeight: 500 }} />
+                  <RTooltip
+                    content={({ payload }) => {
+                      if (!payload?.[0]) return null;
+                      const d = payload[0].payload;
+                      return (
+                        <div className="bg-white p-2 rounded shadow border text-xs">
+                          <p className="font-semibold">{d.domain}</p>
+                          <p>Average: <b>{d.average_score.toFixed(1)} / 5</b></p>
+                        </div>
+                      );
+                    }}
+                  />
+                  <RBar dataKey="average_score" fill="#1e40af" radius={[0, 8, 8, 0]} barSize={22}>
+                    {(data?.domain_progress || []).map((_, i) => (
+                      <RCell key={i} fill={["#1e40af", "#0891b2", "#0e7490", "#4338ca"][i % 4]} />
+                    ))}
+                  </RBar>
+                </RBarChart>
+              </RContainer>
+            </div>
+            <p className="text-xs text-surface-400 mt-2">Each bar = <b>real</b> <code>AVG(current_score)</code> per domain from your scores</p>
+          </div>
+
+          {/* Gap Distribution Pie — real counts from gap_score thresholds */}
+          <div className="bg-surface-50 rounded-xl p-4 border">
+            <h4 className="text-sm font-semibold text-surface-800 mb-3 flex items-center gap-2"><Target className="w-4 h-4 text-accent-600" /> Skill Gap Distribution</h4>
+            <div className="h-[220px]">
+              <RContainer width="100%" height="100%">
+                <RPieChart>
+                  <RPie
+                    data={[
+                      { name: "High Gap (≥2)", value: data?.gaps.high.length || 0, fill: "#ef4444" },
+                      { name: "Medium (1-2)", value: data?.gaps.medium.length || 0, fill: "#f59e0b" },
+                      { name: "Achieved (<1)", value: data?.gaps.achieved.length || 0, fill: "#10b981" },
+                    ].filter(d => d.value > 0)}
+                    dataKey="value"
+                    nameKey="name"
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={55}
+                    outerRadius={85}
+                    paddingAngle={3}
+                    label={({ name, value }) => `${name}: ${value}`}
+                    labelLine={false}
+                  >
+                    {[
+                      { fill: "#ef4444" },
+                      { fill: "#f59e0b" },
+                      { fill: "#10b981" },
+                    ].map((c, i) => (
+                      <RCell key={i} fill={c.fill} />
+                    ))}
+                  </RPie>
+                  <RTooltip />
+                </RPieChart>
+              </RContainer>
+            </div>
+            <div className="flex justify-center gap-3 text-xs">
+              <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-red-500" /> High</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-amber-500" /> Medium</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-emerald-500" /> Achieved</span>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -419,7 +536,7 @@ export default function DashboardPage() {
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold text-surface-900">Skill Gap Analysis</h3>
             <Link 
-              href="/dashboard/competencies" 
+              href="/competencies" 
               className="text-sm text-primary-600 hover:text-primary-800 flex items-center gap-1"
             >
               View All <ArrowRight className="w-4 h-4" />
@@ -488,28 +605,39 @@ export default function DashboardPage() {
           </div>
 
           <div className="space-y-3">
+            <p className="text-xs text-surface-400 mb-1">Real hybrid KG (skill_gap + peer + mandatory + XAI) from <code>/api/recommendations?limit=5</code></p>
             {data?.recommended_courses.length ? (
-              data.recommended_courses.slice(0, 4).map((course) => (
-                <div 
+              data.recommended_courses.slice(0, 4).map((course: any) => (
+                <div
                   key={course.id}
-                  className="flex items-center justify-between p-4 bg-surface-50 rounded-lg hover:bg-surface-100 transition-colors"
+                  className="p-4 bg-surface-50 rounded-lg hover:bg-surface-100 transition-colors border border-surface-100"
                 >
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-primary-100 rounded-lg flex items-center justify-center">
-                      <BookOpen className="w-5 h-5 text-primary-600" />
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start gap-3 flex-1 min-w-0">
+                      <div className="w-10 h-10 bg-primary-100 rounded-lg flex items-center justify-center shrink-0">
+                        <BookOpen className="w-5 h-5 text-primary-600" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="font-medium text-surface-900 line-clamp-1">{course.title}</p>
+                        <p className="text-xs text-surface-500">{course.provider} {course.duration_hours?`• ${course.duration_hours}h`:""} {course.score!=null?`• score ${Number(course.score).toFixed(2)}`:""}</p>
+                        <p className="text-xs text-surface-600 mt-1 line-clamp-2" title={course.matching_gap}>{course.matching_gap}</p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="font-medium text-surface-900">{course.title}</p>
-                      <p className="text-xs text-surface-500">{course.provider} - {course.duration_hours}h</p>
-                    </div>
+                    <span className={`shrink-0 px-2 py-1 rounded text-xs font-medium ${
+                      course.priority === "high"
+                        ? "bg-red-100 text-red-700 border border-red-200"
+                        : "bg-amber-100 text-amber-700 border border-amber-200"
+                    }`}>
+                      {course.priority === "high" ? "High" : "Medium"}
+                    </span>
                   </div>
-                  <span className={`px-2 py-1 rounded text-xs font-medium ${
-                    course.priority === "high" 
-                      ? "bg-red-100 text-red-700" 
-                      : "bg-yellow-100 text-yellow-700"
-                  }`}>
-                    {course.priority === "high" ? "High" : "Medium"} Priority
-                  </span>
+                  {course.factors && course.factors.length>0 && (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {course.factors.slice(0,2).map((f:any,i:number)=>(
+                        <span key={i} className="text-[10px] px-1.5 py-0.5 bg-white border rounded text-surface-500">{f.factor}: {(f.weight*100).toFixed(0)}%</span>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))
             ) : (

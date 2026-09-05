@@ -49,7 +49,7 @@ const SEVERITY_CONFIG = {
 };
 
 const STORAGE_KEY = "skillup_dismissed_banners";
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001").replace(/\/$/, "");
 
 export default function AdminBannerPopup() {
   const [banners, setBanners] = useState<Banner[]>([]);

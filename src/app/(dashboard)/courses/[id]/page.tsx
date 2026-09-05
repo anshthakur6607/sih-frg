@@ -73,7 +73,7 @@ export default function CoursePlayerPage() {
             const ext = mimeType.includes("mp4") ? "mp4" : "webm";
             form.append("file", blob, `course-${Date.now()}.${ext}`);
             form.append("language_code", LANG_TO_SARVAM_BCP[aiLang] || "unknown");
-            const r = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/ai/speech-to-text`, { method:"POST", headers:{ Authorization:`Bearer ${session?.access_token||""}` }, body: form });
+            const r = await fetch(`${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001").replace(/\/$/, "")}/api/ai/speech-to-text`, { method:"POST", headers:{ Authorization:`Bearer ${session?.access_token||""}` }, body: form });
             const j = await r.json().catch(()=>({}));
             if (!r.ok) {
               if (r.status===422) { /* silence */ return; }
@@ -116,7 +116,7 @@ export default function CoursePlayerPage() {
       const supabase2 = createClient();
       const { data:{ session} } = await supabase2.auth.getSession();
       const token = session?.access_token || "";
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/materials/generate/${courseId}`, {
+      const res = await fetch(`${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001").replace(/\/$/, "")}/api/materials/generate/${courseId}`, {
         method: "POST", headers: { "Content-Type":"application/json", Authorization:`Bearer ${token}` },
       });
       const j = await res.json().catch(()=>({}));

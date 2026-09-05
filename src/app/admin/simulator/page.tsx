@@ -14,7 +14,7 @@ export default function SimulatorPage() {
   const simulate = async () => {
     setLoading(true); setError(null);
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/admin/simulate`, {
+      const res = await fetch(`${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001").replace(/\/$/, "")}/api/admin/simulate`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("sb-token")||""}` },
         body: JSON.stringify({ scenario })

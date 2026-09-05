@@ -89,7 +89,7 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
             }
           } catch {}
         }
-        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/ai/translate`, {
+        const res = await fetch(`${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001").replace(/\/$/, "")}/api/ai/translate`, {
           method: "POST",
           headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
           body: JSON.stringify({ text: englishText, target_language: language, source_language: "en" }),
@@ -172,7 +172,7 @@ export async function translateText(text: string, targetLang: string): Promise<s
         }
       }
     }
-    const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/ai/translate`, {
+    const res = await fetch(`${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001").replace(/\/$/, "")}/api/ai/translate`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify({ text, target_language: targetLang, source_language: "en" }),

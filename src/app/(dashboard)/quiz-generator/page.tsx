@@ -142,7 +142,7 @@ export default function EnhancedQuizGenerator() {
       setBankLoading(true);
       try {
         const token = (await supabase.auth.getSession()).data.session?.access_token;
-        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/ai/questions`, { headers: { Authorization: `Bearer ${token}` } });
+        const response = await fetch(`${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001").replace(/\/$/, "")}/api/ai/questions`, { headers: { Authorization: `Bearer ${token}` } });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.error || "Could not load question bank");
         setBankQuestions(data.data || []);
@@ -195,11 +195,11 @@ export default function EnhancedQuizGenerator() {
       const formData = new FormData();
       formData.append("file", file);
       formData.append("config", JSON.stringify({ ...requestBody, document_text: undefined }));
-      response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/ai/quiz/generate-from-file`, {
+      response = await fetch(`${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001").replace(/\/$/, "")}/api/ai/quiz/generate-from-file`, {
         method: "POST", headers: { Authorization: `Bearer ${token}` }, body: formData,
       });
     } else {
-      response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/ai/quiz/generate`, {
+      response = await fetch(`${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001").replace(/\/$/, "")}/api/ai/quiz/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify(requestBody),
@@ -225,7 +225,7 @@ export default function EnhancedQuizGenerator() {
       setAdaptiveAnswers(history);
       if (history.length >= questionCount) {
         const token = (await supabase.auth.getSession()).data.session?.access_token;
-        const submit = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/ai/quiz/submit`, {
+        const submit = await fetch(`${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001").replace(/\/$/, "")}/api/ai/quiz/submit`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
           body: JSON.stringify({
@@ -400,7 +400,7 @@ export default function EnhancedQuizGenerator() {
     }
     try {
       const token = (await supabase.auth.getSession()).data.session?.access_token;
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/ai/quiz/submit`, {
+      const response = await fetch(`${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001").replace(/\/$/, "")}/api/ai/quiz/submit`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({

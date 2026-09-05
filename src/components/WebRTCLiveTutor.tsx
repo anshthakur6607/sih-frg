@@ -190,7 +190,7 @@ export default function WebRTCLiveTutor({ courseId, moduleId, videoTimestamp, pr
       const supabase = createClient();
       const { data:{ session } } = await supabase.auth.getSession();
       const token = session?.access_token || "";
-      await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/ai/live-tutor/session`,{
+      await fetch(`${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001").replace(/\/$/, "")}/api/ai/live-tutor/session`,{
         method:"POST", headers:{ "Content-Type":"application/json", Authorization:`Bearer ${token}` },
         body: JSON.stringify({ course_id: courseId, module_id: moduleId, last_timestamp: videoTimestamp, conversation_history: transcripts, summary_state: transcripts.slice(-3).map(t=>t.text).join(" | ") })
       });

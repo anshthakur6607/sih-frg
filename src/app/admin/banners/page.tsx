@@ -78,7 +78,7 @@ const SEVERITY_OPTIONS = [
 ];
 
 const LEVEL_OPTIONS = ["L1", "L2", "L3", "L4", "L5", "L6", "L7"];
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001").replace(/\/$/, "");
 
 export default function AdminBannersPage() {
   const { t } = useLanguage();

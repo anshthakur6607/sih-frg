@@ -266,7 +266,7 @@ export default function AITutorPage() {
           form.append("file", blob, `tutor-${Date.now()}.${ext}`);
           form.append("language_code", LANG_TO_BCP47[language] || "unknown");
           try {
-            const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/ai/speech-to-text`, { method: "POST", headers: { Authorization: `Bearer ${session?.access_token || ""}` }, body: form });
+            const response = await fetch(`${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001").replace(/\/$/, "")}/api/ai/speech-to-text`, { method: "POST", headers: { Authorization: `Bearer ${session?.access_token || ""}` }, body: form });
             const data = await response.json().catch(() => ({}));
             if (!response.ok) {
               if (response.status === 422) { alert(data.error || "No speech detected — speak louder, closer to mic, 1-2s"); return; }

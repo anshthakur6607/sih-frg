@@ -11,7 +11,7 @@ export default function AdminReviewsPage() {
   useEffect(() => {
     (async () => {
       const session = (await supabase.auth.getSession()).data.session;
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/admin/reviews?status=${filter}`, { headers: { Authorization: `Bearer ${session?.access_token || ""}` } });
+      const res = await fetch(`${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001").replace(/\/$/, "")}/api/admin/reviews?status=${filter}`, { headers: { Authorization: `Bearer ${session?.access_token || ""}` } });
       const json = await res.json().catch(() => ({}));
       setReviews(json.data || []);
     })();
@@ -20,7 +20,7 @@ export default function AdminReviewsPage() {
   const decide = async (id: string, decision: "approved" | "rejected") => {
     const session = (await supabase.auth.getSession()).data.session;
     const review = reviews.find((r) => r.id === id);
-    const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/admin/reviews/${id}`, {
+    const res = await fetch(`${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001").replace(/\/$/, "")}/api/admin/reviews/${id}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token || ""}` },
       body: JSON.stringify({ final_verified_score: Number(review?.auto_score || 0), review_status: decision, admin_notes: decision === "approved" ? "Approved via admin review" : "Rejected via admin review" }),

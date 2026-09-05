@@ -17,7 +17,7 @@ interface Enrollment {
 }
 
 const STORAGE_KEY = "skillup_last_reminder_check";
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001").replace(/\/$/, "");
 
 export default function CourseReminderPopup() {
   const [reminders, setReminders] = useState<Enrollment[]>([]);

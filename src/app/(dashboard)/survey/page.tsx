@@ -208,7 +208,7 @@ export default function SurveyPage() {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
+      const apiUrl = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001").replace(/\/$/, "");
       const res = await fetch(`${apiUrl}/api/surveys/job-roles`, {
         headers: {
           "Content-Type": "application/json",
@@ -261,7 +261,7 @@ export default function SurveyPage() {
 
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
+      const apiUrl = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001").replace(/\/$/, "");
       const res = await fetch(`${apiUrl}/api/ai/quiz/generate`, {
         method: "POST",
         headers: {

@@ -93,19 +93,93 @@ export default function AdminPage() {
   const [predicting, setPredicting] = useState(false);
   const [activeTab, setActiveTab] = useState<"overview" | "competencies" | "des" | "reviews">("overview");
   const [desHeatmap, setDesHeatmap] = useState<{ states:string[]; domains:string[]; heatmap:Record<string,Record<string,number>> }|null>(null);
+  const [deptHeatmap, setDeptHeatmap] = useState<{ departments:string[]; domains:string[]; heatmap:Record<string,Record<string,number>> }|null>(null);
   const supabase = createClient();
 
   useEffect(() => {
     fetchAdminData();
     fetchDesHeatmap();
+    fetchDeptHeatmap();
   }, [supabase]);
 
   async function fetchDesHeatmap(){
     try{
       const token = (await supabase.auth.getSession()).data.session?.access_token;
-      const r = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/admin/des-heatmap`,{headers:{Authorization:`Bearer ${token||""}`}});
+      const r = await fetch(`${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001").replace(/\/$/, "")}/api/admin/des-heatmap`,{headers:{Authorization:`Bearer ${token||""}`}});
       const j = await r.json(); if(j.success) setDesHeatmap(j.data);
     }catch(e){ console.warn("des heatmap",e); }
+  }
+  async function fetchDeptHeatmap(){
+    try{
+      // Try backend heatmap first (competency-level), then aggregate to domain; fallback to direct Supabase
+      const token = (await supabase.auth.getSession()).data.session?.access_token;
+      const r = await fetch(`${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001").replace(/\/$/, "")}/api/admin/heatmap`,{headers:{Authorization:`Bearer ${token||""}`}});
+      const j = await r.json().catch(()=>({}));
+      if(j.success && j.data?.heatmap){
+        // j.data.heatmap is dept -> competency -> {score}
+        // Need to map competency -> domain via Supabase
+        const { data: comps } = await supabase.from("competencies").select("id, name, domain:competency_domains(name)");
+        const compToDomain = new Map((comps||[]).map((c:any)=>[c.name, c.domain?.name || "Unknown"]));
+        // Also need domain list
+        const domains = ["Statistical","Technical","Digital Governance","Behavioural"];
+        const deptHeat: Record<string, Record<string, number>> = {};
+        const depts = Object.keys(j.data.heatmap);
+        for(const dept of depts){
+          const byComp = j.data.heatmap[dept] as Record<string, {score:number}>;
+          const byDom: Record<string, {sum:number,cnt:number}> = {};
+          for(const [compName, v] of Object.entries(byComp)){
+            const dom = compToDomain.get(compName) || "Unknown";
+            if(!byDom[dom]) byDom[dom]={sum:0,cnt:0};
+            byDom[dom].sum+= (v as any).score || 0;
+            byDom[dom].cnt+=1;
+          }
+          deptHeat[dept]={};
+          for(const d of domains){
+            const agg = byDom[d];
+            deptHeat[dept][d]= agg && agg.cnt? Math.round((agg.sum/agg.cnt)*10)/10 : 0;
+          }
+        }
+        setDeptHeatmap({ departments: depts, domains, heatmap: deptHeat });
+        return;
+      }
+      // Fallback direct Supabase aggregation (real scores)
+      const { data: scores } = await supabase.from("user_competency_scores").select("current_score, competency:competencies(domain:competency_domains(name)), user:profiles!inner(department)");
+      // This direct join via !inner may not work; fallback to two queries
+      if(!scores || scores.length===0) throw new Error("no scores");
+      const map: Record<string, Record<string,{sum:number,cnt:number}>>={};
+      const domSet = new Set<string>();
+      // Need to re-query properly: fetch profiles and comps separately and join in JS (simpler)
+      throw new Error("fallback to JS agg below");
+    }catch(e){
+      // Final fallback: compute via JS as dashboard does — profiles + competencies + scores
+      try{
+        const { data: allScores } = await supabase.from("user_competency_scores").select("current_score, competency_id, user_id");
+        const { data: profs } = await supabase.from("profiles").select("id, department");
+        const { data: comps } = await supabase.from("competencies").select("id, domain:competency_domains(name)");
+        const compToDom = new Map((comps||[]).map((c:any)=>[c.id, c.domain?.name || "Unknown"]));
+        const profToDept = new Map((profs||[]).map((p:any)=>[p.id, p.department || "Unknown"]));
+        const agg: Record<string, Record<string,{sum:number,cnt:number}>>={};
+        (allScores||[]).forEach((s:any)=>{
+          const dept = profToDept.get(s.user_id) || "Unknown";
+          const dom = compToDom.get(s.competency_id) || "Unknown";
+          if(!agg[dept]) agg[dept]={};
+          if(!agg[dept][dom]) agg[dept][dom]={sum:0,cnt:0};
+          agg[dept][dom].sum+= Number(s.current_score)||0;
+          agg[dept][dom].cnt+=1;
+        });
+        const domains = ["Statistical","Technical","Digital Governance","Behavioural"];
+        const depts = Object.keys(agg);
+        const heat: Record<string,Record<string,number>>={};
+        depts.forEach(d=>{
+          heat[d]={};
+          domains.forEach(dom=>{
+            const v = agg[d][dom];
+            heat[d][dom]= v && v.cnt? Math.round((v.sum/v.cnt)*10)/10 : 0;
+          });
+        });
+        setDeptHeatmap({ departments: depts, domains, heatmap: heat });
+      }catch(e2){ console.warn("dept heatmap fallback",e2); }
+    }
   }
 
   async function fetchAdminData() {
@@ -411,23 +485,23 @@ export default function AdminPage() {
                 </tr>
               </thead>
               <tbody>
-                {(stats?.department_distribution || []).map((dept) => (
-                  <tr key={dept.department} className="border-b border-surface-100 hover:bg-surface-50">
-                    <td className="py-3 px-4 font-medium text-surface-900">{dept.department}</td>
-                    <td className="py-3 px-4 text-center">
-                      <span className="px-2 py-1 rounded text-xs font-medium bg-yellow-100 text-yellow-700">3.2</span>
-                    </td>
-                    <td className="py-3 px-4 text-center">
-                      <span className="px-2 py-1 rounded text-xs font-medium bg-green-100 text-green-700">3.8</span>
-                    </td>
-                    <td className="py-3 px-4 text-center">
-                      <span className="px-2 py-1 rounded text-xs font-medium bg-yellow-100 text-yellow-700">2.9</span>
-                    </td>
-                    <td className="py-3 px-4 text-center">
-                      <span className="px-2 py-1 rounded text-xs font-medium bg-green-100 text-green-700">4.1</span>
-                    </td>
+                {(deptHeatmap?.departments || stats?.department_distribution.map(d=>d.department) || []).map((dept: string) => (
+                  <tr key={dept} className="border-b border-surface-100 hover:bg-surface-50">
+                    <td className="py-3 px-4 font-medium text-surface-900">{dept}</td>
+                    {(deptHeatmap?.domains || ["Statistical","Technical","Digital Governance","Behavioural"]).map(dom => {
+                      const v = deptHeatmap?.heatmap[dept]?.[dom];
+                      const bg = v==null ? "bg-surface-100 text-surface-400" : v<2.5 ? "bg-red-100 text-red-700" : v<3.5 ? "bg-yellow-100 text-yellow-700" : "bg-green-100 text-green-700";
+                      return (
+                        <td key={dom} className="py-3 px-4 text-center">
+                          <span className={`px-2 py-1 rounded text-xs font-medium ${bg}`}>{v!=null ? v.toFixed(1) : "-"}</span>
+                        </td>
+                      );
+                    })}
                   </tr>
                 ))}
+                {(!deptHeatmap?.departments?.length && !stats?.department_distribution?.length) && (
+                  <tr><td colSpan={5} className="text-center py-6 text-surface-400">No department data — complete assessments to generate scores</td></tr>
+                )}
               </tbody>
             </table>
           </div>
