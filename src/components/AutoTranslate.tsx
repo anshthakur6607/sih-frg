@@ -31,7 +31,9 @@ export default function AutoTranslate({ text, as: As = "span", className, fallba
   }, [text, language]);
 
   const Tag = As;
-  return <Tag className={className}>{translated || fallback || text}</Tag>;
+  // data-notranslate: output is already AI-translated — keeps the site-wide
+  // DOM translator (siteTranslate) from translating it a second time.
+  return <Tag className={className} data-notranslate>{translated || fallback || text}</Tag>;
 }
 
 // Hook version for inline use

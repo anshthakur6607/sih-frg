@@ -18,7 +18,6 @@ export default function CoursePlayerPage() {
   const courseId = params.id;
   const supabase = createClient();
   const [course, setCourse] = useState<any>(null);
-  const [timestamp, setTimestamp] = useState(0);
   const [completed, setCompleted] = useState(false);
 
   const [notFound, setNotFound] = useState(false);
@@ -161,19 +160,25 @@ export default function CoursePlayerPage() {
         <h1 className="text-2xl font-bold text-slate-900"><AutoTranslate text={course.title} /></h1>
         <p className="text-slate-600 flex items-center gap-2"><BookOpen className="w-4 h-4" /> {course.provider} • {course.duration_hours}h {course.is_tpac_classroom && <><MapPin className="w-4 h-4" />{course.tpac_location}</>}</p>
       </div>
-      <div className="bg-black rounded-lg overflow-hidden aspect-video relative">
-        {course.course_url ? (
-          <iframe src={course.course_url} className="w-full h-full" allow="autoplay; fullscreen" title={course.title} onLoad={() => setTimestamp(t => t+1)} />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center text-white bg-gradient-to-br from-[#1e40af] to-[#0891b2]">
-            <div className="text-center">
-              <p className="text-lg font-semibold">Course Video Player</p>
-              <p className="text-sm opacity-80">iGOT content would embed here: {course.title}</p>
-              <button onClick={()=>setTimestamp(t=>t+10)} className="mt-4 bg-white text-[#1e40af] px-4 py-2 rounded">Simulate +10s</button>
-              <p className="text-xs mt-2">Timestamp: {timestamp}s</p>
-            </div>
+      {/* No iframe embed — browsers/ad-blockers block external course embeds
+          ("This content is blocked"). Open the course in a new tab instead. */}
+      <div className="rounded-lg overflow-hidden bg-gradient-to-br from-[#1e40af] to-[#0891b2] text-white">
+        <div className="px-6 py-8 flex flex-col sm:flex-row items-center gap-5">
+          <div className="w-14 h-14 bg-white/20 rounded-xl flex items-center justify-center shrink-0">
+            <BookOpen className="w-7 h-7" />
           </div>
-        )}
+          <div className="flex-1 text-center sm:text-left">
+            <p className="text-lg font-semibold">Course content</p>
+            <p className="text-sm opacity-80">Browser-safe mode: embedded previews are blocked, so open the full course in a new tab.</p>
+          </div>
+          {course.course_url ? (
+            <a href={course.course_url} target="_blank" rel="noreferrer" className="bg-white text-[#1e40af] px-5 py-2.5 rounded-lg font-medium shrink-0 hover:bg-slate-100">
+              Open Course
+            </a>
+          ) : (
+            <span className="text-sm bg-white/20 px-4 py-2 rounded-lg shrink-0">No external link — use Study Materials below</span>
+          )}
+        </div>
       </div>
       <div className="bg-white rounded-lg p-4 border flex items-center justify-between">
         <div className="flex items-center gap-2"><Clock className="w-4 h-4" /> Duration: {course.duration_hours} hours</div>
