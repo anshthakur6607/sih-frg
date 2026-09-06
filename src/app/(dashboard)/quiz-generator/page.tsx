@@ -136,7 +136,6 @@ export default function EnhancedQuizGenerator() {
   
   const [generating, setGenerating] = useState(false);
   const [quiz, setQuiz] = useState<QuizQuestion[]>([]);
-  const [selectedQuestion, setSelectedQuestion] = useState<QuizQuestion | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [duplicateWarnings, setDuplicateWarnings] = useState<Record<string, string>>({});
   const [courses, setCourses] = useState<Array<{ id: string; title: string; provider: string }>>([]);
@@ -867,12 +866,6 @@ export default function EnhancedQuizGenerator() {
                             >
                               <Copy className="w-4 h-4 text-surface-400" />
                             </button>
-                            <button
-                              onClick={() => setSelectedQuestion(selectedQuestion?.id === q.id ? null : q)}
-                              className="p-1.5 hover:bg-surface-100 rounded"
-                            >
-                              <Eye className="w-4 h-4 text-surface-400" />
-                            </button>
                           </div>
                         </div>
 
@@ -902,21 +895,9 @@ export default function EnhancedQuizGenerator() {
                           </div>
                         )}
 
-                        {/* Expanded View */}
-                        {selectedQuestion?.id === q.id && (
-                          <div className="mt-3 pt-3 border-t border-surface-100">
-                            <p className="text-xs font-medium text-surface-700 mb-1">Explanation:</p>
-                            <p className="text-sm text-surface-600">{q.explanation}</p>
-                            <div className="mt-2 flex gap-2">
-                              <span className="text-xs bg-surface-100 text-surface-600 px-2 py-1 rounded">
-                                Difficulty: {q.difficulty}
-                              </span>
-                              <span className="text-xs bg-surface-100 text-surface-600 px-2 py-1 rounded">
-                                Language: {q.language || selectedLanguage}
-                              </span>
-                            </div>
-                          </div>
-                        )}
+                        <p className="mt-2 text-[11px] text-surface-400">
+                          Answers & explanations unlock after you Take Quiz and submit.
+                        </p>
                       </div>
                     </div>
                   ))}
