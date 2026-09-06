@@ -9,6 +9,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { Award, Clock, CheckCircle, XCircle, AlertTriangle, PlayCircle } from "lucide-react";
 import { createClient } from "@/lib/supabase";
 
@@ -121,8 +122,19 @@ export default function AssessmentsPage() {
                 </div>
               </div>
 
-              <div className="mt-4 pt-4 border-t border-surface-100 text-xs text-surface-400">
-                Completed on {new Date(assessment.created_at).toLocaleDateString()}
+              <div className="mt-4 pt-4 border-t border-surface-100 flex items-center justify-between">
+                <span className="text-xs text-surface-400">
+                  Completed on {new Date(assessment.created_at).toLocaleDateString()}
+                </span>
+                {assessment.course_id && (
+                  <Link
+                    href={`/quiz/${assessment.course_id}`}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-primary-800 text-white rounded-lg text-xs font-medium hover:bg-primary-700 transition-colors"
+                  >
+                    <PlayCircle className="w-4 h-4" />
+                    Retake Exam
+                  </Link>
+                )}
               </div>
             </div>
           ))

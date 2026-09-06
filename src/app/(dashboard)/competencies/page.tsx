@@ -78,31 +78,46 @@ export default function CompetenciesPage() {
         return;
       }
 
-      const apiUrl = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/api/competencies`;
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData?.session?.access_token;
+      // Direct Supabase read (same proven query as the dashboard):
+      // the taxonomy endpoint GET /api/competencies has no per-user scores,
+      // and an untrimmed base URL caused double-slash CORS failures.
+      const { data: gapsData, error: gapsError } = await supabase
+        .from("user_competency_scores")
+        .select(`
+          competency_id,
+          current_score,
+          required_score,
+          gap_score,
+          competency:competencies(
+            id, name,
+            domain:competency_domains(name)
+          )
+        `)
+        .eq("user_id", user.id);
 
-      const response = await fetch(apiUrl, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
+      if (gapsError) throw new Error(gapsError.message || "Failed to load competencies");
+
+      const items = ((gapsData || []) as unknown as Array<{
+        competency_id: string;
+        current_score: number | null;
+        required_score: number | null;
+        gap_score: number | null;
+        competency: { id: string; name: string; domain_id: string; domain?: { id: string; name: string } } | null;
+        competency_domain?: { id: string; name: string } | null;
+      }>).map((s) => {
+        const current = Number(s.current_score) || 0;
+        const required = Number(s.required_score) || 0;
+        const gapRaw = s.gap_score == null ? required - current : Number(s.gap_score);
+        return {
+          competency_id: s.competency_id,
+          current_score: current,
+          required_score: required,
+          gap_score: Number.isFinite(gapRaw) ? gapRaw : 0,
+          competency: s.competency || { id: "", name: "Unknown", domain_id: "" },
+          competency_domain: s.competency_domain,
+        } as CompetencyScore;
       });
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch competencies: ${response.status}`);
-      }
-
-      const payload = await response.json();
-      const items = Array.isArray(payload?.competencies)
-        ? payload.competencies
-        : Array.isArray(payload?.data)
-          ? payload.data
-          : Array.isArray(payload)
-            ? payload
-            : [];
-      setCompetencies(items as CompetencyScore[]);
+      setCompetencies(items);
     } catch (err) {
       console.error("Error fetching competencies:", err);
       setError(err instanceof Error ? err.message : "Failed to load competencies");
@@ -130,11 +145,14 @@ export default function CompetenciesPage() {
   const normalizedCompetencies = Array.isArray(competencies) ? competencies : [];
 
   const groupedByDomain: Record<string, DomainGroup> = normalizedCompetencies.reduce((acc, item) => {
-    const rawDomain = item.competency_domain?.name ?? item.competency?.domain ?? "Unknown";
+    const domainObj = (item.competency as unknown as { domain?: { name?: string } | string })?.domain;
+    const rawDomain = item.competency_domain?.name
+      ?? (typeof domainObj === "string" ? domainObj : domainObj?.name)
+      ?? "Unknown";
     const domain = typeof rawDomain === "string" && rawDomain.trim().length > 0
       ? rawDomain
       : "Unknown";
-    const gap = item.required_score - item.current_score;
+    const gap = Number(item.gap_score ?? (item.required_score - item.current_score)) || 0;
 
     if (!acc[domain]) {
       acc[domain] = {
@@ -353,7 +371,7 @@ export default function CompetenciesPage() {
             <div className="space-y-3">
               {domainGroup.competencies.map((comp) => {
                 const colors = getGapColor(comp.gap_score);
-                const progress = (comp.current_score / comp.required_score) * 100;
+                const progress = comp.required_score > 0 ? (comp.current_score / comp.required_score) * 100 : 0;
                 
                 return (
                   <div
