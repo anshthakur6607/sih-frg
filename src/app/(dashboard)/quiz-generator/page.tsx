@@ -17,12 +17,12 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import * as pdfjsLib from "pdfjs-dist";
-import { 
-  FileText, 
-  Upload, 
-  Brain, 
-  Loader2, 
-  CheckCircle, 
+import {
+  FileText,
+  Upload,
+  Brain,
+  Loader2,
+  CheckCircle,
   XCircle,
   Eye,
   Copy,
@@ -35,7 +35,12 @@ import {
   Shuffle,
   BookOpen,
   Mic,
-  Languages
+  Languages,
+  History,
+  Play,
+  RotateCcw,
+  Send,
+  Trophy
 } from "lucide-react";
 import { createClient } from "@/lib/supabase";
 
@@ -52,6 +57,30 @@ interface QuizQuestion {
   language: string;
   irt_difficulty?: number;
   duplicate_warning?: string;
+}
+
+/** One submitted attempt (also the shape of generated_quiz_attempts rows). */
+interface QuizAttempt {
+  id: string;
+  title: string;
+  course_id?: string | null;
+  language: string;
+  questions: QuizQuestion[];
+  answers: Record<string, number>;
+  correct_count: number;
+  total: number;
+  score: number;
+  created_at: string;
+}
+
+const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001").replace(/\/$/, "");
+
+async function authToken(supabase: any): Promise<string> {
+  try {
+    return (await supabase.auth.getSession()).data.session?.access_token || "";
+  } catch {
+    return "";
+  }
 }
 
 const BLOOM_LEVELS = [
@@ -84,7 +113,18 @@ const DIFFICULTY_PRESETS = [
 ];
 
 export default function EnhancedQuizGenerator() {
-  const [mode, setMode] = useState<"create" | "bank" | "live">("create");
+  const [mode, setMode] = useState<"create" | "bank" | "history">("create");
+  // take/result phases for the currently generated quiz
+  const [phase, setPhase] = useState<"preview" | "taking" | "result">("preview");
+  const [answers, setAnswers] = useState<Record<string, number>>({});
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState<{ score: number; correct: number; total: number } | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  // history
+  const [history, setHistory] = useState<QuizAttempt[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [expandedAttempt, setExpandedAttempt] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [fileText, setFileText] = useState("");
   const [questionCount, setQuestionCount] = useState(10);
@@ -256,12 +296,139 @@ export default function EnhancedQuizGenerator() {
       }
 
       setQuiz(questions);
+      // fresh quiz → back to preview, clear any previous attempt state
+      setPhase("preview");
+      setAnswers({});
+      setResult(null);
+      setSubmitError(null);
     } catch (err: any) {
       setError(err.message || "Failed to generate quiz");
     } finally {
       setGenerating(false);
     }
   };
+
+  const startTaking = () => {
+    setAnswers({});
+    setResult(null);
+    setSubmitError(null);
+    setPhase("taking");
+  };
+
+  const selectOption = (questionId: string, optionIndex: number) => {
+    if (phase !== "taking") return;
+    setAnswers((prev) => ({ ...prev, [questionId]: optionIndex }));
+  };
+
+  const answeredCount = quiz.filter((q) => answers[q.id] !== undefined).length;
+
+  /** Submit answers to the AI backend for checking + persist attempt for history. */
+  const submitQuiz = async () => {
+    if (!quiz.length || submitting) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("Please log in to submit the quiz.");
+      const token = await authToken(supabase);
+      const payloadAnswers = quiz.map((q) => ({
+        question_id: q.id,
+        selected_option: answers[q.id] ?? -1,
+        correct_answer: q.correct_answer,
+      }));
+
+      // 1) AI check (score + learning-signal + competency bump on backend)
+      let score = 0, correct = 0;
+      try {
+        const res = await fetch(`${API_BASE}/api/ai/quiz/submit`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            ...(selectedCourseId ? { course_id: selectedCourseId } : {}),
+            answers: payloadAnswers.filter((a) => a.selected_option >= 0),
+          }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (res.ok && j?.data) {
+          score = Number(j.data.score) || 0;
+          correct = Number(j.data.correct) || 0;
+        } else {
+          throw new Error(j?.error || `Check failed (${res.status})`);
+        }
+      } catch (e: any) {
+        // backend unreachable → local grading fallback so the user still gets marks
+        correct = quiz.filter((q) => answers[q.id] === q.correct_answer).length;
+        score = quiz.length ? Math.round((correct / quiz.length) * 100) : 0;
+        console.warn("AI check fallback to local grading:", e?.message);
+      }
+      const total = quiz.length;
+      setResult({ score, correct, total });
+
+      // 2) persist full attempt for History tab (best-effort)
+      const attemptRow = {
+        user_id: user.id,
+        course_id: selectedCourseId || null,
+        title: `${courses.find((c) => c.id === selectedCourseId)?.title || "Generated Quiz"} — ${new Date().toLocaleString()}`,
+        language: selectedLanguage,
+        questions: quiz.map((q) => ({
+          id: q.id, text: q.text, options: q.options, correct_answer: q.correct_answer,
+          explanation: q.explanation, bloom_level: q.bloom_level,
+        })),
+        answers,
+        correct_count: correct,
+        total,
+        score,
+      };
+      const { error: histErr } = await supabase.from("generated_quiz_attempts").insert(attemptRow);
+      if (histErr) {
+        console.warn("History save skipped:", histErr.message);
+        setSubmitError(
+          histErr.message.includes("does not exist") || histErr.message.includes("schema cache")
+            ? "Result checked, but History needs one-time setup: run backend/supabase/quiz_attempt_history.sql in Supabase SQL Editor."
+            : `Result checked, but history save failed: ${histErr.message}`
+        );
+      } else if (mode === "history") {
+        void fetchHistory();
+      }
+      setPhase("result");
+    } catch (e: any) {
+      setSubmitError(e?.message || "Submit failed");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  /** Load past attempts for the History tab. */
+  const fetchHistory = async () => {
+    setHistoryLoading(true);
+    setHistoryError(null);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const { data, error: err } = await supabase
+        .from("generated_quiz_attempts")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false })
+        .limit(50);
+      if (err) throw err;
+      setHistory((data || []) as QuizAttempt[]);
+    } catch (e: any) {
+      const msg = e?.message || "Failed to load history";
+      setHistoryError(
+        msg.includes("does not exist") || msg.includes("schema cache")
+          ? "No history table yet — run backend/supabase/quiz_attempt_history.sql once in Supabase SQL Editor, then new attempts will appear here."
+          : msg
+      );
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (mode === "history") void fetchHistory();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
 
   const handleSaveQuiz = async () => {
     if (!quiz.length) return;
@@ -270,28 +437,28 @@ export default function EnhancedQuizGenerator() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      // Save each question with IRT params
+      // Save each question with backend-schema keys + auth (was 401/400 before)
+      const token = await authToken(supabase);
+      let saved = 0;
       for (const q of quiz) {
-        await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/api/questions`, {
+        const res = await fetch(`${API_BASE}/api/ai/questions`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
           body: JSON.stringify({
-            question_text: q.text,
-            options: q.options,
+            text: q.text,
+            options: q.options.slice(0, 4),
             correct_answer: q.correct_answer,
             bloom_level: q.bloom_level,
-            difficulty: q.difficulty,
+            difficulty_beta: Math.max(-3, Math.min(3, Number(q.irt_difficulty ?? q.difficulty ?? 0))),
             explanation: q.explanation,
             language: q.language || selectedLanguage,
-            irt_a: 1.2,
-            irt_b: q.irt_difficulty || 0,
-            irt_c: 0.2,
             content_hash: simpleHash(q.text),
           }),
         });
+        if (res.ok) saved++;
       }
 
-      alert(`Saved ${quiz.length} questions to question bank!`);
+      alert(saved === quiz.length ? `Saved ${saved} questions to question bank!` : `Saved ${saved}/${quiz.length} — check backend logs for the rest.`);
     } catch (err) {
       console.error("Save failed:", err);
     }
@@ -355,6 +522,7 @@ export default function EnhancedQuizGenerator() {
         {[
           { id: "create", label: "Create Quiz", icon: Sparkles },
           { id: "bank", label: "Question Bank", icon: BookOpen },
+          { id: "history", label: "History", icon: History },
         ].map(tab => (
           <button
             key={tab.id}
@@ -613,7 +781,7 @@ export default function EnhancedQuizGenerator() {
             ) : (
               <>
                 {/* Stats Bar */}
-                <div className="bg-white rounded-lg shadow p-4 flex items-center justify-between">
+                <div className="bg-white rounded-lg shadow p-4 flex items-center justify-between flex-wrap gap-3">
                   <div className="flex gap-4 text-sm">
                     <span className="text-surface-600">{quiz.length} Questions</span>
                     <span className="text-surface-600">
@@ -622,8 +790,16 @@ export default function EnhancedQuizGenerator() {
                     <span className="text-surface-600">
                       IRT: {irtCalibration ? "Enabled" : "Disabled"}
                     </span>
+                    {phase === "taking" && (
+                      <span className="font-medium text-primary-700">Answered: {answeredCount}/{quiz.length}</span>
+                    )}
                   </div>
                   <div className="flex gap-2">
+                    {phase !== "taking" && phase !== "result" && (
+                      <button onClick={startTaking} className="btn btn-primary text-sm flex items-center gap-1.5">
+                        <Play className="w-4 h-4" /> Take Quiz
+                      </button>
+                    )}
                     <button onClick={handleSaveQuiz} className="btn btn-secondary text-sm">
                       Save to Bank
                     </button>
@@ -636,7 +812,34 @@ export default function EnhancedQuizGenerator() {
                   </div>
                 </div>
 
-                {/* Questions List */}
+                {submitError && (
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800 flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                    {submitError}
+                  </div>
+                )}
+
+                {/* Questions Area — preview / taking / result */}
+                {phase === "taking" ? (
+                  <TakeQuizView
+                    quiz={quiz}
+                    answers={answers}
+                    onSelect={selectOption}
+                    onSubmit={submitQuiz}
+                    submitting={submitting}
+                    answeredCount={answeredCount}
+                  />
+                ) : phase === "result" && result ? (
+                  <div className="space-y-4">
+                    <ResultBanner
+                      score={result.score}
+                      correct={result.correct}
+                      total={result.total}
+                      onRetake={startTaking}
+                    />
+                    <AttemptReview questions={quiz} answers={answers} />
+                  </div>
+                ) : (
                 <div className="space-y-4">
                   {quiz.map((q, idx) => (
                     <div key={q.id} className="bg-white rounded-lg shadow-md border overflow-hidden">
@@ -718,6 +921,7 @@ export default function EnhancedQuizGenerator() {
                     </div>
                   ))}
                 </div>
+                )}
               </>
             )}
           </div>
@@ -731,6 +935,270 @@ export default function EnhancedQuizGenerator() {
           <p className="text-surface-600">Browse and manage your saved questions</p>
         </div>
       )}
+
+      {mode === "history" && (
+        <HistoryPanel
+          history={history}
+          loading={historyLoading}
+          error={historyError}
+          expandedId={expandedAttempt}
+          onToggle={(id) => setExpandedAttempt((p) => (p === id ? null : id))}
+          onRetry={fetchHistory}
+        />
+      )}
+    </div>
+  );
+}
+
+// ============ TAKE / RESULT / HISTORY VIEWS ============
+
+/** Selectable-option quiz taking view. */
+function TakeQuizView({
+  quiz,
+  answers,
+  onSelect,
+  onSubmit,
+  submitting,
+  answeredCount,
+}: {
+  quiz: QuizQuestion[];
+  answers: Record<string, number>;
+  onSelect: (qid: string, idx: number) => void;
+  onSubmit: () => void;
+  submitting: boolean;
+  answeredCount: number;
+}) {
+  const allAnswered = answeredCount === quiz.length;
+  return (
+    <div className="space-y-4">
+      <div className="bg-primary-50 border border-primary-200 rounded-lg p-3 text-sm text-primary-800">
+        Select one option per question, then submit — the AI backend checks your answers, updates your score, and saves the attempt to History.
+      </div>
+      {quiz.map((q, idx) => (
+        <div key={q.id} className="bg-white rounded-lg shadow-md border overflow-hidden">
+          <div className="p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-sm font-bold text-surface-400">Q{idx + 1}</span>
+              <span className="text-xs px-2 py-0.5 rounded bg-surface-100 text-surface-600">{q.bloom_level}</span>
+              {answers[q.id] !== undefined && (
+                <span className="text-xs px-2 py-0.5 rounded bg-green-100 text-green-700 flex items-center gap-1">
+                  <CheckCircle className="w-3 h-3" /> Answered
+                </span>
+              )}
+            </div>
+            <p className="text-surface-900 font-medium mb-3">{q.text}</p>
+            <div className="space-y-1.5" role="radiogroup" aria-label={`Question ${idx + 1}`}>
+              {q.options.map((opt, i) => {
+                const selected = answers[q.id] === i;
+                return (
+                  <button
+                    key={i}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    onClick={() => onSelect(q.id, i)}
+                    className={`w-full flex items-center gap-2 p-2.5 rounded-lg border text-left transition-colors ${
+                      selected
+                        ? "border-primary-500 bg-primary-50 ring-1 ring-primary-400"
+                        : "bg-surface-50 border-surface-200 hover:border-primary-300 hover:bg-primary-50/50"
+                    }`}
+                  >
+                    <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium shrink-0 ${
+                      selected ? "bg-primary-600 text-white" : "bg-surface-200 text-surface-600"
+                    }`}>
+                      {String.fromCharCode(65 + i)}
+                    </span>
+                    <span className="text-sm text-surface-900">{opt}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      ))}
+      <div className="sticky bottom-4 bg-white rounded-lg shadow-lg border p-4 flex items-center justify-between">
+        <p className="text-sm text-surface-600">
+          <b>{answeredCount}/{quiz.length}</b> answered
+          {!allAnswered && <span className="text-amber-600"> — answer all to submit</span>}
+        </p>
+        <button
+          onClick={onSubmit}
+          disabled={!allAnswered || submitting}
+          className="btn btn-primary flex items-center gap-2 disabled:opacity-50"
+        >
+          {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+          {submitting ? "Checking with AI…" : "Submit for AI Check"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Score banner after checking. */
+function ResultBanner({
+  score,
+  correct,
+  total,
+  onRetake,
+}: {
+  score: number;
+  correct: number;
+  total: number;
+  onRetake: () => void;
+}) {
+  return (
+    <div className="bg-white rounded-lg shadow-md border overflow-hidden">
+      <div className={`px-6 py-5 text-white flex items-center gap-4 ${score >= 70 ? "bg-gradient-to-r from-green-600 to-emerald-500" : score >= 40 ? "bg-gradient-to-r from-amber-500 to-yellow-500" : "bg-gradient-to-r from-red-600 to-rose-500"}`}>
+        <Trophy className="w-10 h-10 shrink-0" />
+        <div className="flex-1">
+          <p className="text-sm opacity-90">AI-checked result</p>
+          <p className="text-3xl font-bold">{score}% <span className="text-base font-normal opacity-90">({correct}/{total} correct)</span></p>
+        </div>
+        <button onClick={onRetake} className="bg-white/20 hover:bg-white/30 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-1.5">
+          <RotateCcw className="w-4 h-4" /> Retake
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Per-question review: user answer vs correct answer + marks + explanation. */
+function AttemptReview({
+  questions,
+  answers,
+}: {
+  questions: QuizQuestion[];
+  answers: Record<string, number>;
+}) {
+  return (
+    <div className="space-y-3">
+      {questions.map((q, idx) => {
+        const userIdx = answers[q.id];
+        const isCorrect = userIdx === q.correct_answer;
+        return (
+          <div key={q.id || idx} className={`bg-white rounded-lg shadow border overflow-hidden ${isCorrect ? "border-green-200" : "border-red-200"}`}>
+            <div className="p-4">
+              <div className="flex items-start justify-between gap-3 mb-2">
+                <p className="font-medium text-surface-900"><span className="text-surface-400 font-bold text-sm mr-2">Q{idx + 1}</span>{q.text}</p>
+                <span className={`shrink-0 text-xs font-bold px-2.5 py-1 rounded-full ${isCorrect ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
+                  {isCorrect ? "+1" : "0"} / 1
+                </span>
+              </div>
+              <div className="space-y-1.5 mt-3">
+                {(q.options || []).map((opt, i) => {
+                  const isRight = i === q.correct_answer;
+                  const isUser = i === userIdx;
+                  return (
+                    <div
+                      key={i}
+                      className={`flex items-center gap-2 p-2 rounded-lg border text-sm ${
+                        isRight
+                          ? "border-green-400 bg-green-50 text-green-900 font-medium"
+                          : isUser
+                            ? "border-red-300 bg-red-50 text-red-800"
+                            : "border-surface-100 bg-surface-50 text-surface-500"
+                      }`}
+                    >
+                      <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium shrink-0 ${
+                        isRight ? "bg-green-600 text-white" : isUser ? "bg-red-500 text-white" : "bg-surface-200 text-surface-500"
+                      }`}>
+                        {String.fromCharCode(65 + i)}
+                      </span>
+                      <span className="flex-1">{opt}</span>
+                      {isRight && <CheckCircle className="w-4 h-4 text-green-600 shrink-0" />}
+                      {isUser && !isRight && <XCircle className="w-4 h-4 text-red-500 shrink-0" />}
+                      {isRight && <span className="text-[10px] font-bold text-green-700 uppercase">Correct answer</span>}
+                      {isUser && !isRight && <span className="text-[10px] font-bold text-red-600 uppercase">Your answer</span>}
+                    </div>
+                  );
+                })}
+                {userIdx === undefined && (
+                  <p className="text-xs text-amber-600">Not answered.</p>
+                )}
+              </div>
+              {q.explanation && (
+                <p className="mt-2 text-xs text-surface-500 bg-surface-50 border border-surface-100 rounded p-2">
+                  <b>Why:</b> {q.explanation}
+                </p>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** History tab: past attempts with expandable full review. */
+function HistoryPanel({
+  history,
+  loading,
+  error,
+  expandedId,
+  onToggle,
+  onRetry,
+}: {
+  history: QuizAttempt[];
+  loading: boolean;
+  error: string | null;
+  expandedId: string | null;
+  onToggle: (id: string) => void;
+  onRetry: () => void;
+}) {
+  if (loading) {
+    return (
+      <div className="bg-white rounded-lg shadow p-12 text-center">
+        <Loader2 className="w-8 h-8 mx-auto animate-spin text-primary-600 mb-2" />
+        <p className="text-surface-600 text-sm">Loading quiz history…</p>
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="bg-white rounded-lg shadow p-12 text-center">
+        <AlertTriangle className="w-10 h-10 mx-auto text-amber-500 mb-3" />
+        <p className="text-surface-700 text-sm max-w-lg mx-auto">{error}</p>
+        <button onClick={onRetry} className="btn btn-secondary text-sm mt-4">Retry</button>
+      </div>
+    );
+  }
+  if (!history.length) {
+    return (
+      <div className="bg-white rounded-lg shadow p-12 text-center">
+        <History className="w-16 h-16 mx-auto text-surface-200 mb-4" />
+        <h3 className="text-lg font-medium text-surface-900 mb-2">No Quiz History Yet</h3>
+        <p className="text-surface-600">Generate a quiz, take it, and submit — attempts with answers and marks will appear here.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-3">
+      {history.map((a) => {
+        const expanded = expandedId === a.id;
+        const qs = Array.isArray(a.questions) ? a.questions : [];
+        const ans = (a.answers || {}) as Record<string, number>;
+        return (
+          <div key={a.id} className="bg-white rounded-lg shadow border overflow-hidden">
+            <button onClick={() => onToggle(a.id)} className="w-full p-4 flex items-center gap-4 text-left hover:bg-surface-50">
+              <div className={`w-12 h-12 rounded-lg flex items-center justify-center font-bold text-white shrink-0 ${a.score >= 70 ? "bg-green-500" : a.score >= 40 ? "bg-amber-500" : "bg-red-500"}`}>
+                {a.score}%
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="font-medium text-surface-900 truncate">{a.title}</p>
+                <p className="text-xs text-surface-500">
+                  {new Date(a.created_at).toLocaleString()} • {a.correct_count}/{a.total} correct • {(a.language || "en").toUpperCase()}
+                </p>
+              </div>
+              <Eye className="w-4 h-4 text-surface-400 shrink-0" />
+            </button>
+            {expanded && (
+              <div className="border-t border-surface-100 p-4 bg-surface-50/50">
+                <AttemptReview questions={qs} answers={ans} />
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
