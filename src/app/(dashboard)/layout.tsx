@@ -41,6 +41,7 @@ import {
 } from "lucide-react";
 import { createClient } from "@/lib/supabase";
 import { LanguageProvider, useLanguage } from "@/context/LanguageContext";
+import { useSiteAutoTranslate } from "@/lib/siteTranslate";
 import { LANGUAGE_NAMES } from "@/lib/i18n/translations";
 import AdminBannerPopup from "@/components/AdminBannerPopup";
 import CourseReminderPopup from "@/components/CourseReminderPopup";
@@ -89,6 +90,8 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const { language: siteLang, setLanguage: setSiteLang, t } = useLanguage();
+  // Translate every rendered word (not just t() strings) via cached Sarvam
+  useSiteAutoTranslate(siteLang);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
