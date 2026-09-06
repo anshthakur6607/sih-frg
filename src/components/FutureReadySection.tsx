@@ -49,20 +49,66 @@ export default function FutureReadySection() {
               ? data.suggestions
               : [];
 
-        const normalized = payload.map((item: any, index: number) => {
-          const rawId = item?.id || item?.course_id || item?.course_title || item?.title || item?.name || "";
-          const safeId = String(rawId).trim();
-          const title = item?.title || item?.course_title || item?.name || `Suggested course ${index + 1}`;
-          return {
-            id: safeId || `future-ready-${index}`,
-            title,
-            why_this_matters: item?.why_this_matters || item?.reason || item?.why || "",
-            target_competency: item?.target_competency || item?.competencies_gained?.[0] || "",
-            course_id: item?.course_id || item?.id || item?.course_title || title,
-            duration_hours: item?.duration_hours,
-            provider: item?.provider,
-          };
-        });
+        // Drop raw JSON-syntax fragments the AI sometimes returns as lines
+        // ('{', '"suggestions": [', '"course_id": null,') — never real courses.
+        const looksReal = (v: unknown) => {
+          if (!v || typeof v !== "string") return false;
+          const t = v.trim();
+          if (t.length < 8) return false;
+          if (/^[{}\[\]",\s]*$/.test(t)) return false;
+          if (/^"[^"]*"\s*:\s*[[{]/.test(t)) return false;
+          if (/^"[^"]*"\s*:\s*(null|true|false|\d)/.test(t)) return false;
+          return /[A-Za-z]{3,}/.test(t);
+        };
+        const isUuid = (v: unknown) => typeof v === "string" && /^[0-9a-f-]{36}$/i.test(v);
+
+        const normalized = payload
+          .map((item: any, index: number) => {
+            if (typeof item === "string") return null; // raw text chunk, not a course
+            const title = item?.title || item?.course_title || item?.name || "";
+            if (!looksReal(title)) return null;
+            const rawId = item?.id || item?.course_id || "";
+            return {
+              id: String(rawId || title).trim() || `future-ready-${index}`,
+              title: String(title).trim(),
+              why_this_matters: item?.why_this_matters || item?.reason || item?.why || item?.trend_relevance || "",
+              target_competency: item?.target_competency || item?.competencies_gained?.[0] || "",
+              course_id: isUuid(rawId) ? rawId : "",
+              course_title: String(title).trim(),
+              duration_hours: item?.duration_hours,
+              provider: item?.provider,
+            };
+          })
+          .filter(Boolean) as (FutureSuggestion & { course_title: string })[];
+
+        // Resolve real course ids by title so Enroll lands on an actual course.
+        const missing = normalized.filter((s) => !s.course_id);
+        if (missing.length > 0) {
+          try {
+            const orFilter = missing
+              .slice(0, 5)
+              .map((s) => `title.ilike.%${s.course_title.replace(/[%_,]/g, "").slice(0, 40)}%`)
+              .join(",");
+            const { data: matches } = await supabase
+              .from("courses")
+              .select("id, title")
+              .or(orFilter)
+              .limit(10);
+            for (const s of missing) {
+              const hit = (matches || []).find((c: any) =>
+                c.title && s.course_title && c.title.toLowerCase().includes(s.course_title.toLowerCase().slice(0, 20))
+              ) || (matches || [])[0];
+              if (hit?.id) {
+                s.course_id = hit.id;
+                s.id = hit.id;
+              }
+            }
+          } catch { /* keep catalog fallback below */ }
+        }
+        // Final fallback: anything still unresolved links to the catalog, never /courses/null.
+        for (const s of normalized) {
+          if (!s.course_id) s.course_id = "";
+        }
 
         setSuggestions(normalized.slice(0, 5));
       }
@@ -153,7 +199,7 @@ export default function FutureReadySection() {
             )}
 
             <Link
-              href={`/courses/${s.course_id || s.id}`}
+              href={/^[0-9a-f-]{36}$/i.test(s.course_id || "") ? `/courses/${s.course_id}` : "/courses"}
               className="w-full bg-white text-indigo-700 hover:bg-blue-50 transition-colors rounded-lg px-3 py-2 text-xs font-semibold flex items-center justify-center gap-1"
             >
               Enroll

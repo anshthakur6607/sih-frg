@@ -27,6 +27,7 @@ import {
   RefreshCw
 } from "lucide-react";
 import { createClient } from "@/lib/supabase";
+import { resolveMissingDomains } from "@/lib/domainFallback";
 import CompetencyRadarChart from "@/components/CompetencyRadarChart";
 import FutureReadySection from "@/components/FutureReadySection";
 import { useLanguage } from "@/context/LanguageContext";
@@ -114,6 +115,7 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [hasSurvey, setHasSurvey] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [unmappedDomains, setUnmappedDomains] = useState(0);
   const supabase = useMemo(() => createClient(), []);
 
   const fetchDashboard = useCallback(async (isManual = false) => {
@@ -178,13 +180,17 @@ export default function DashboardPage() {
           .eq("user_id", user.id);
 
         // Process data — normalize nulls (gap_score GENERATED can arrive null; fall back to required-current)
-        const scores = ((gapsData || []) as CompetencyScore[]).map((s) => {
+        const normalized = ((gapsData || []) as CompetencyScore[]).map((s) => {
           const current = Number(s.current_score) || 0;
           const required = Number(s.required_score) || 0;
           const gapRaw = s.gap_score == null ? required - current : Number(s.gap_score);
           const gap = Number.isFinite(gapRaw) ? gapRaw : 0;
           return { ...s, current_score: current, required_score: required, gap_score: gap };
         });
+        // Second-stage domain resolution: if the competency→domain embed came
+        // back null, resolve via direct lookups so charts don't collapse to "Unknown".
+        const { scores, unmapped } = await resolveMissingDomains(supabase, normalized);
+        setUnmappedDomains(unmapped);
 
         const highGaps = scores.filter(s => s.gap_score >= 2.0);
         const mediumGaps = scores.filter(s => s.gap_score >= 1.0 && s.gap_score < 2.0);
@@ -214,13 +220,16 @@ export default function DashboardPage() {
             domainRequiredMap.set(domain, { total: s.required_score, count: 1 });
           }
         });
-        const domainProgress = Array.from(domainMap.entries()).map(([domain, d]) => ({
+        // "Unknown" bucket is excluded from charts (it would otherwise swallow
+        // every domain); an amber notice below names the count + the fix.
+        const mappedEntries = Array.from(domainMap.entries()).filter(([domain]) => domain !== "Unknown");
+        const domainProgress = mappedEntries.map(([domain, d]) => ({
           domain,
           average_score: d.count > 0 ? d.total / d.count : 0,
         }));
 
         // Radar chart data
-        const radarData = Array.from(domainMap.entries()).map(([domain, d]) => {
+        const radarData = mappedEntries.map(([domain, d]) => {
           const req = domainRequiredMap.get(domain);
           const requiredAvg = req && req.count > 0 ? req.total / req.count : 5;
           const currentAvg = d.count > 0 ? d.total / d.count : 0;
@@ -426,6 +435,12 @@ export default function DashboardPage() {
           <h3 className="text-sm font-medium text-surface-700 mb-3">Competency Profile by Domain (Real)</h3>
           <CompetencyRadarChart data={data?.radar_data || []} />
           <p className="text-xs text-surface-400 mt-2 text-center">Current (blue) vs Required (cyan dashed) — computed from your actual <code>user_competency_scores</code></p>
+          {unmappedDomains > 0 && (
+            <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+              <span>{unmappedDomains} of your scores aren&apos;t linked to a competency domain, so charts exclude them. Fix: run <code>backend/supabase/backfill_competency_domains.sql</code> in Supabase SQL Editor, then hit Refresh.</span>
+            </div>
+          )}
         </div>
 
         {/* Real Domain & Gap Charts — no hardcode, all from live data */}

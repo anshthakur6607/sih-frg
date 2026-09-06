@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase";
+import { resolveMissingDomains } from "@/lib/domainFallback";
 import { useLanguage } from "@/context/LanguageContext";
 import CompetencyRadarChart from "@/components/CompetencyRadarChart";
 
@@ -117,7 +118,8 @@ export default function CompetenciesPage() {
           competency_domain: s.competency_domain,
         } as CompetencyScore;
       });
-      setCompetencies(items);
+      const { scores: resolved } = await resolveMissingDomains(supabase, items);
+      setCompetencies(resolved);
     } catch (err) {
       console.error("Error fetching competencies:", err);
       setError(err instanceof Error ? err.message : "Failed to load competencies");
